@@ -1,0 +1,2390 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>@NeuroFeedBot — Telegram Mini App (BotHost)</title>
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            background-color: #050507;
+            color: #f4f4f5;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+            letter-spacing: -0.01em;
+        }
+        .custom-scroll::-webkit-scrollbar {
+            width: 3px;
+            height: 3px;
+        }
+        .custom-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.14);
+            border-radius: 9999px;
+        }
+        /* TikTok Vertical Snap Container */
+        .feed-container {
+            scroll-snap-type: y mandatory;
+            overflow-y: scroll;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+            scroll-behavior: smooth;
+        }
+        .feed-container::-webkit-scrollbar {
+            display: none;
+        }
+        .feed-slide {
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
+        }
+        @keyframes heartBurst {
+            0% { transform: translate(-50%, -50%) scale(0); opacity: 1; }
+            50% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+            100% { transform: translate(-50%, -90%) scale(1.35); opacity: 0; }
+        }
+        .floating-heart {
+            position: absolute;
+            pointer-events: none;
+            z-index: 60;
+            animation: heartBurst 0.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex items-center justify-center select-none bg-[#050507]">
+
+    <!-- ===================================================================== -->
+    <!-- TELEGRAM MINI APP SHELL (Ready for BotHost Static / Mini-App Hosting) -->
+    <!-- ===================================================================== -->
+    <div id="tmaAppFrame" class="w-full h-full sm:w-[420px] sm:h-[92vh] sm:max-h-[860px] sm:rounded-[32px] sm:border sm:border-zinc-800/90 bg-[#09090b] flex flex-col overflow-hidden shadow-2xl relative transition-all duration-300">
+
+        <!-- ================================================= -->
+        <!-- 1. TOP HEADER BAR                                 -->
+        <!-- ================================================= -->
+        <header id="tmaHeader" class="h-12 bg-[#09090b]/95 backdrop-blur-md border-b border-zinc-800/80 px-4 flex items-center justify-between shrink-0 z-30">
+            <div class="flex items-center">
+                <button id="tmaBackBtn" onclick="handleHeaderBack()" class="py-1 text-zinc-400 hover:text-white font-medium text-xs flex items-center gap-1.5 transition">
+                    <i class="fa-solid fa-chevron-left text-[10px]"></i>
+                    <span id="tmaBackText">Закрыть</span>
+                </button>
+            </div>
+
+            <div class="flex items-center gap-1.5 cursor-pointer" onclick="switchTab('start')">
+                <span class="font-semibold text-xs tracking-tight text-zinc-100">NeuroFeed</span>
+                <span class="text-[10px] text-zinc-500 font-mono">bot</span>
+            </div>
+
+            <div class="flex items-center gap-1.5">
+                <button onclick="toggleGlobalMute()" id="headerMuteBtn" class="w-7 h-7 rounded-lg hover:bg-zinc-800/80 text-zinc-400 hover:text-white flex items-center justify-center text-xs transition" title="Звук видео">
+                    <i class="fa-solid fa-volume-high text-[11px]"></i>
+                </button>
+                <button onclick="toggleDesktopExpand()" id="headerExpandBtn" class="hidden sm:flex w-7 h-7 rounded-lg hover:bg-zinc-800/80 text-zinc-400 hover:text-white items-center justify-center text-xs transition" title="На весь экран">
+                    <i class="fa-solid fa-expand text-[11px]"></i>
+                </button>
+                <button onclick="openAddContentModal('video')" class="px-2.5 h-7 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-[11px] flex items-center gap-1 transition" title="Добавить контент">
+                    <i class="fa-solid fa-plus text-[9px]"></i>
+                    <span>Добавить</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- ================================================= -->
+        <!-- MAIN VIEWPORT AREA                                -->
+        <!-- ================================================= -->
+        <div class="flex-1 overflow-hidden relative flex flex-col">
+
+            <!-- ============================================= -->
+            <!-- TAB 1: INSTANT MINIMAL GROUP SELECTION        -->
+            <!-- ============================================= -->
+            <div id="tabStart" class="flex-1 overflow-y-auto custom-scroll p-4 flex flex-col justify-between space-y-4">
+                
+                <div class="space-y-4">
+                    <!-- Compact Participant Bar (auto-filled from Telegram WebApp user if available) -->
+                    <div class="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3 flex items-center justify-between gap-2.5">
+                        <div class="flex-1 min-w-0">
+                            <label class="block text-[10px] font-medium text-zinc-500">Испытуемый</label>
+                            <input type="text" id="participantNameInput" value="Участник #1" placeholder="Имя или @username" class="w-full bg-transparent text-xs font-semibold text-zinc-100 focus:outline-none mt-0.5">
+                        </div>
+                        <button onclick="nextParticipantNumber()" class="px-2.5 py-1 rounded-lg bg-zinc-800/80 hover:bg-zinc-700/80 text-[11px] font-mono text-zinc-300 shrink-0 transition">
+                            +1 ID
+                        </button>
+                    </div>
+
+                    <!-- Minimal Prompt -->
+                    <div class="flex items-center justify-between px-0.5">
+                        <h1 class="text-xs font-medium text-zinc-400">Выберите группу</h1>
+                        <span class="text-[10px] text-zinc-600 font-mono">старт в 1 клик</span>
+                    </div>
+
+                    <!-- 4 CLEAN MINIMALIST GROUP CARDS -->
+                    <div class="grid grid-cols-1 gap-2">
+                        <!-- Group 1 -->
+                        <button type="button" onclick="instantLaunchGroup(1)" class="group w-full text-left bg-zinc-900/50 hover:bg-zinc-900 active:scale-[0.99] border border-zinc-800/80 hover:border-zinc-700 p-3.5 rounded-xl transition flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-5 h-5 rounded-md bg-zinc-800 text-zinc-200 font-mono text-[10px] font-semibold flex items-center justify-center">1</span>
+                                    <span class="text-xs font-semibold text-zinc-100">Просто листают</span>
+                                </div>
+                                <p class="text-[11px] text-zinc-500 mt-1 pl-7">Таймер виден • вся лента</p>
+                            </div>
+                            <i class="fa-solid fa-arrow-right text-[11px] text-zinc-600 group-hover:text-zinc-200 group-hover:translate-x-0.5 transition"></i>
+                        </button>
+
+                        <!-- Group 2 -->
+                        <button type="button" onclick="instantLaunchGroup(2)" class="group w-full text-left bg-zinc-900/50 hover:bg-zinc-900 active:scale-[0.99] border border-zinc-800/80 hover:border-zinc-700 p-3.5 rounded-xl transition flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-5 h-5 rounded-md bg-zinc-800 text-zinc-200 font-mono text-[10px] font-semibold flex items-center justify-center">2</span>
+                                    <span class="text-xs font-semibold text-zinc-100">Время скрыто, считать нельзя</span>
+                                </div>
+                                <p class="text-[11px] text-zinc-500 mt-1 pl-7">Без часов • запрет считать про себя</p>
+                            </div>
+                            <i class="fa-solid fa-arrow-right text-[11px] text-zinc-600 group-hover:text-zinc-200 group-hover:translate-x-0.5 transition"></i>
+                        </button>
+
+                        <!-- Group 3 -->
+                        <button type="button" onclick="instantLaunchGroup(3)" class="group w-full text-left bg-zinc-900/50 hover:bg-zinc-900 active:scale-[0.99] border border-zinc-800/80 hover:border-zinc-700 p-3.5 rounded-xl transition flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-5 h-5 rounded-md bg-zinc-800 text-zinc-200 font-mono text-[10px] font-semibold flex items-center justify-center">3</span>
+                                    <span class="text-xs font-semibold text-zinc-100">Время скрыто, считать можно</span>
+                                </div>
+                                <p class="text-[11px] text-zinc-500 mt-1 pl-7">Без часов • можно считать про себя</p>
+                            </div>
+                            <i class="fa-solid fa-arrow-right text-[11px] text-zinc-600 group-hover:text-zinc-200 group-hover:translate-x-0.5 transition"></i>
+                        </button>
+
+                        <!-- Group 4 -->
+                        <button type="button" onclick="instantLaunchGroup(4)" class="group w-full text-left bg-zinc-900/50 hover:bg-zinc-900 active:scale-[0.99] border border-zinc-800/80 hover:border-zinc-700 p-3.5 rounded-xl transition flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-5 h-5 rounded-md bg-zinc-200 text-zinc-950 font-mono text-[10px] font-bold flex items-center justify-center">4</span>
+                                    <span class="text-xs font-semibold text-zinc-100">Ограниченная лента</span>
+                                </div>
+                                <p class="text-[11px] text-zinc-500 mt-1 pl-7">Выборка (<span id="startG4Count">6</span> шт.) • время скрыто • считать нельзя</p>
+                            </div>
+                            <i class="fa-solid fa-arrow-right text-[11px] text-zinc-600 group-hover:text-zinc-200 group-hover:translate-x-0.5 transition"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Compact Footer Controls -->
+                <div class="border-t border-zinc-800/80 pt-3 space-y-2.5">
+                    <div class="flex items-center justify-between text-[11px]">
+                        <span class="text-zinc-500">Таймер (1–3 гр.):</span>
+                        <div class="flex gap-1">
+                            <button type="button" onclick="setDurationLimit(0)" data-sec="0" class="dur-btn px-2 py-1 rounded-md text-[11px] font-medium bg-zinc-100 text-zinc-950">Свободно</button>
+                            <button type="button" onclick="setDurationLimit(45)" data-sec="45" class="dur-btn px-2 py-1 rounded-md text-[11px] font-medium bg-zinc-900 text-zinc-400 border border-zinc-800">45с</button>
+                            <button type="button" onclick="setDurationLimit(60)" data-sec="60" class="dur-btn px-2 py-1 rounded-md text-[11px] font-medium bg-zinc-900 text-zinc-400 border border-zinc-800">60с</button>
+                            <button type="button" onclick="setDurationLimit(90)" data-sec="90" class="dur-btn px-2 py-1 rounded-md text-[11px] font-medium bg-zinc-900 text-zinc-400 border border-zinc-800">90с</button>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between text-[11px] text-zinc-500">
+                        <button onclick="switchTab('studio')" class="hover:text-zinc-200 transition">
+                            Контент: <strong id="startPoolCount" class="text-zinc-300 font-mono">9</strong>
+                        </button>
+                        <button onclick="switchTab('analytics')" class="hover:text-zinc-200 transition">
+                            Конспекты: <strong id="startLogsCount" class="text-zinc-300 font-mono">2</strong> →
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================= -->
+            <!-- TAB 2: CONTENT STUDIO (ВИДЕО, ФОТО, ПОКУПКИ)  -->
+            <!-- ============================================= -->
+            <div id="tabStudio" class="hidden flex-1 overflow-y-auto custom-scroll p-4 space-y-3">
+                <div class="bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-3.5 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="text-xs font-semibold text-zinc-100">Конструктор ленты</h2>
+                            <p class="text-[11px] text-zinc-500">Видео, фото, покупки и посты</p>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <button onclick="openBotHostModal()" class="px-2 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px] transition">
+                                BotHost
+                            </button>
+                            <span id="studioCountBadge" class="px-2 py-1 rounded-md bg-zinc-950 border border-zinc-800 text-[10px] font-mono text-zinc-400">9 шт.</span>
+                        </div>
+                    </div>
+
+                    <!-- 4 Content Type Add Buttons -->
+                    <div class="grid grid-cols-4 gap-1.5">
+                        <button onclick="openAddContentModal('video')" class="py-2 px-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-[11px] flex flex-col items-center justify-center gap-1 transition">
+                            <i class="fa-solid fa-video text-xs"></i>
+                            <span>Видео</span>
+                        </button>
+                        <button onclick="openAddContentModal('photo')" class="py-2 px-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-[11px] flex flex-col items-center justify-center gap-1 transition">
+                            <i class="fa-regular fa-image text-xs"></i>
+                            <span>Фото</span>
+                        </button>
+                        <button onclick="openAddContentModal('product')" class="py-2 px-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-[11px] flex flex-col items-center justify-center gap-1 transition">
+                            <i class="fa-solid fa-bag-shopping text-xs"></i>
+                            <span>Покупка</span>
+                        </button>
+                        <button onclick="openAddContentModal('other')" class="py-2 px-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-[11px] flex flex-col items-center justify-center gap-1 transition">
+                            <i class="fa-solid fa-align-left text-xs"></i>
+                            <span>Пост</span>
+                        </button>
+                    </div>
+
+                    <!-- Quick Batch Uploads (Videos & Photos) -->
+                    <div class="grid grid-cols-2 gap-1.5">
+                        <label class="border border-dashed border-zinc-700 hover:border-zinc-500 bg-zinc-950/50 rounded-lg p-2 text-center cursor-pointer transition">
+                            <input type="file" id="quickMultiVideoInput" accept="video/*" multiple class="hidden" onchange="handleQuickMultiUpload(event, 'video')">
+                            <div class="flex items-center justify-center gap-1.5 text-zinc-300 font-medium text-[10px]">
+                                <i class="fa-solid fa-film text-[10px]"></i>
+                                <span>Пачка видео</span>
+                            </div>
+                        </label>
+                        <label class="border border-dashed border-zinc-700 hover:border-zinc-500 bg-zinc-950/50 rounded-lg p-2 text-center cursor-pointer transition">
+                            <input type="file" id="quickMultiPhotoInput" accept="image/*" multiple class="hidden" onchange="handleQuickMultiUpload(event, 'photo')">
+                            <div class="flex items-center justify-center gap-1.5 text-zinc-300 font-medium text-[10px]">
+                                <i class="fa-regular fa-images text-[10px]"></i>
+                                <span>Пачка фото</span>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-2 pt-2 border-t border-zinc-800/80 text-[11px]">
+                        <button onclick="keepOnlyCustomItems()" class="text-zinc-400 hover:text-zinc-100 transition">
+                            Только мои
+                        </button>
+                        <span class="text-zinc-500 font-mono text-[10px]">4 гр: <strong id="group4SubsetCount" class="text-zinc-300">6 шт.</strong></span>
+                        <button onclick="restoreDefaultFeed()" class="text-zinc-400 hover:text-zinc-100 transition">
+                            Сбросить
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Feed Items List -->
+                <div id="studioItemsList" class="space-y-1.5 pb-6"></div>
+            </div>
+
+            <!-- ============================================= -->
+            <!-- TAB 3: TIKTOK VERTICAL FEED (ЛЕНТА)           -->
+            <!-- ============================================= -->
+            <div id="tabFeed" class="hidden flex-1 relative bg-black overflow-hidden flex flex-col">
+                
+                <!-- Top Floating Overlay inside Feed -->
+                <div class="absolute top-0 inset-x-0 z-30 bg-gradient-to-b from-black/75 to-transparent pt-2.5 pb-5 px-3.5 pointer-events-none">
+                    <div class="flex items-center justify-between text-xs">
+                        <!-- Visible ONLY in Group 1 -->
+                        <div id="feedClockBox" class="flex items-center gap-1.5 pointer-events-auto bg-black/50 backdrop-blur-md px-2.5 py-1 rounded-md border border-white/10">
+                            <span id="feedRealTime" class="font-mono text-zinc-300 text-[11px]">12:00</span>
+                            <span class="text-white/20">·</span>
+                            <span id="feedSessionTimer" class="font-mono font-semibold text-white text-[11px]">00:00</span>
+                        </div>
+
+                        <!-- Shown in Groups 2, 3, 4 (No time cues!) -->
+                        <div id="feedHiddenTimeBox" class="hidden px-2.5 py-1 rounded-md bg-black/50 backdrop-blur-md border border-white/10 text-[10px] text-zinc-300 font-medium">
+                            <span id="feedGroupRulePill">Группа 2</span>
+                        </div>
+
+                        <!-- Finish & Go to Survey Button -->
+                        <button onclick="finishFeedAndStartSurvey()" class="pointer-events-auto px-3 py-1 rounded-md bg-white/90 hover:bg-white text-zinc-950 font-semibold text-[11px] transition active:scale-95">
+                            <span>К опросу →</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Non-intrusive Rule Banner on Instant Start -->
+                <div id="feedInstantRuleBanner" class="hidden absolute top-12 inset-x-4 z-40 pointer-events-none bg-zinc-900/95 backdrop-blur-md border border-zinc-700/80 rounded-xl p-2.5 text-center transition-opacity duration-300">
+                    <div id="feedInstantRuleTitle" class="text-xs font-semibold text-zinc-100">Группа 1</div>
+                    <div id="feedInstantRuleSub" class="text-[11px] text-zinc-400 mt-0.5">Листайте ленту в свободном темпе</div>
+                </div>
+
+                <!-- VERTICAL SNAP SCROLL CONTAINER -->
+                <div id="tiktokFeedContainer" class="feed-container w-full h-full flex-1"></div>
+
+                <!-- Quick Up/Down Navigation Buttons for Desktop Mouse Users -->
+                <div class="hidden sm:flex flex-col gap-1 absolute right-3 top-1/2 -translate-y-1/2 z-30 opacity-30 hover:opacity-90 transition">
+                    <button onclick="scrollFeedStep(-1)" class="w-7 h-7 rounded-md bg-black/60 border border-white/15 text-white flex items-center justify-center hover:bg-white/15">
+                        <i class="fa-solid fa-chevron-up text-[10px]"></i>
+                    </button>
+                    <button onclick="scrollFeedStep(1)" class="w-7 h-7 rounded-md bg-black/60 border border-white/15 text-white flex items-center justify-center hover:bg-white/15">
+                        <i class="fa-solid fa-chevron-down text-[10px]"></i>
+                    </button>
+                </div>
+
+                <!-- Comments Bottom Drawer inside Feed -->
+                <div id="feedCommentsDrawer" class="hidden absolute inset-x-0 bottom-0 z-40 h-[52%] bg-zinc-950 rounded-t-2xl border-t border-zinc-800 flex flex-col shadow-2xl">
+                    <div class="p-3 border-b border-zinc-800/80 flex items-center justify-between">
+                        <span class="text-xs font-medium text-zinc-300" id="feedCommentsTitle">Комментарии</span>
+                        <button onclick="closeFeedComments()" class="w-6 h-6 rounded-md bg-zinc-900 text-zinc-400 flex items-center justify-center">
+                            <i class="fa-solid fa-xmark text-xs"></i>
+                        </button>
+                    </div>
+                    <div id="feedCommentsList" class="flex-1 overflow-y-auto p-3 space-y-2 text-xs"></div>
+                    <div class="p-2.5 border-t border-zinc-800/80 flex gap-2 bg-zinc-950">
+                        <input type="text" id="feedCommentInput" placeholder="Комментарий..." class="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-zinc-600">
+                        <button onclick="sendFeedComment()" class="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-950 font-semibold text-xs">Отпр.</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================= -->
+            <!-- TAB 4: POST-FEED SURVEY (КОРОТКИЙ ОПРОС)      -->
+            <!-- ============================================= -->
+            <div id="tabSurvey" class="hidden flex-1 overflow-y-auto custom-scroll p-4 space-y-3">
+                <div class="bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-4 space-y-4">
+                    <div class="flex items-center justify-between border-b border-zinc-800/80 pb-2.5">
+                        <div>
+                            <span class="text-[10px] font-mono text-zinc-500" id="surveyParticipantHeader">Участник #1 • Группа 1</span>
+                            <h2 class="text-xs font-semibold text-zinc-100 mt-0.5">Опрос после просмотра</h2>
+                        </div>
+                        <span id="surveyStepBadge" class="px-2 py-0.5 rounded bg-zinc-800 text-[10px] font-mono text-zinc-300">1 / 3</span>
+                    </div>
+
+                    <!-- STEP 1: SUBJECTIVE TIME PERCEPTION -->
+                    <div id="surveyStep1" class="space-y-3.5">
+                        <div class="text-xs text-zinc-300">
+                            1. Сколько времени по вашим ощущениям вы листали ленту?
+                        </div>
+
+                        <div class="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3">
+                            <div class="flex items-center justify-center gap-3">
+                                <div class="w-20">
+                                    <input type="number" id="estMinutesInput" min="0" max="30" value="0" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-1.5 text-base font-mono font-semibold text-center text-white focus:border-zinc-500 focus:outline-none">
+                                    <span class="block text-center text-[10px] text-zinc-500 mt-1">мин</span>
+                                </div>
+                                <span class="text-base font-mono text-zinc-600 -mt-4">:</span>
+                                <div class="w-20">
+                                    <input type="number" id="estSecondsInput" min="0" max="59" value="45" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-1.5 text-base font-mono font-semibold text-center text-white focus:border-zinc-500 focus:outline-none">
+                                    <span class="block text-center text-[10px] text-zinc-500 mt-1">сек</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-[11px] text-zinc-400 mb-1">Считали ли вы секунды про себя?</label>
+                            <select id="surveyCountingSelect" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none">
+                                <option value="Нет, не считал(а)">Нет, не считал(а)</option>
+                                <option value="Иногда прикидывал(а)">Иногда прикидывал(а)</option>
+                                <option value="Да, считал(а) секунды про себя">Да, считал(а) секунды про себя</option>
+                            </select>
+                        </div>
+
+                        <button onclick="setSurveyStep(2)" class="w-full py-2.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs transition">
+                            Далее →
+                        </button>
+                    </div>
+
+                    <!-- STEP 2: FREE RECALL -->
+                    <div id="surveyStep2" class="hidden space-y-3.5">
+                        <div class="text-xs text-zinc-300">
+                            2. Напишите через запятую всё, что запомнилось:
+                        </div>
+
+                        <div>
+                            <textarea id="freeRecallTextarea" rows="4" oninput="handleFreeRecallInput()" placeholder="Например: лампа луна, фото заката, паста..." class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-xs text-white focus:border-zinc-600 focus:outline-none"></textarea>
+                            <div class="flex items-center justify-between mt-1 text-[10px] text-zinc-500">
+                                <span>Совпадений с лентой:</span>
+                                <span id="freeRecallHitBadge" class="font-mono text-zinc-300">0</span>
+                            </div>
+                        </div>
+
+                        <div id="freeRecallMatchedTags" class="flex flex-wrap gap-1"></div>
+
+                        <div class="flex gap-2">
+                            <button onclick="setSurveyStep(1)" class="px-3.5 py-2.5 rounded-lg bg-zinc-900 text-zinc-400 font-medium text-xs">Назад</button>
+                            <button onclick="setSurveyStep(3)" class="flex-1 py-2.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs">
+                                Далее →
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- STEP 3: RECOGNITION CHECKLIST -->
+                    <div id="surveyStep3" class="hidden space-y-3.5">
+                        <div class="text-xs text-zinc-300">
+                            3. Отметьте карточки, которые были в ленте:
+                        </div>
+
+                        <div id="recognitionChecklist" class="space-y-1.5 max-h-[320px] overflow-y-auto custom-scroll pr-1"></div>
+
+                        <div class="flex gap-2 pt-1">
+                            <button onclick="setSurveyStep(2)" class="px-3.5 py-2.5 rounded-lg bg-zinc-900 text-zinc-400 font-medium text-xs">Назад</button>
+                            <button onclick="submitSurveyAndComputeReport()" class="flex-1 py-2.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs">
+                                Сохранить конспект
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================= -->
+            <!-- TAB 5: PARTICIPANT SUMMARIES ("КОНСПЕКТЫ")    -->
+            <!-- ============================================= -->
+            <div id="tabAnalytics" class="hidden flex-1 overflow-y-auto custom-scroll p-4 space-y-3">
+                
+                <div class="bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                        <h2 class="text-xs font-semibold text-zinc-100">Конспекты (<span id="totalSessionsCount">0</span>)</h2>
+                        <p class="text-[10px] text-zinc-500">Записи просмотров и ответы</p>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <button onclick="copyAllSummariesToClipboard()" class="px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-[11px]">
+                            Копировать все
+                        </button>
+                        <button onclick="exportSessionsCsv()" class="px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-[11px]">
+                            CSV
+                        </button>
+                        <button onclick="clearAllSessions()" class="w-6 h-6 rounded-md bg-zinc-900 hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 flex items-center justify-center text-[11px]" title="Очистить">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 4-Group Compact Comparison Row -->
+                <div id="analyticsGroupCards" class="grid grid-cols-4 gap-1.5"></div>
+
+                <!-- Detailed Participant Summary Cards ("Конспекты") -->
+                <div id="sessionsHistoryList" class="space-y-2.5 pb-6"></div>
+            </div>
+
+        </div>
+
+        <!-- ================================================= -->
+        <!-- BOTTOM TELEGRAM MINI APP NAVIGATION BAR           -->
+        <!-- ================================================= -->
+        <nav id="tmaBottomNav" class="h-14 bg-[#09090b] border-t border-zinc-800/80 px-2 flex items-center justify-around shrink-0 z-30">
+            <button onclick="switchTab('start')" id="navTabStart" class="nav-btn flex flex-col items-center justify-center py-1 px-3 text-zinc-100 font-medium text-[10px] transition">
+                <i class="fa-solid fa-sliders text-sm mb-1"></i>
+                <span>Группы</span>
+            </button>
+            <button onclick="switchTab('studio')" id="navTabStudio" class="nav-btn flex flex-col items-center justify-center py-1 px-3 text-zinc-500 hover:text-zinc-300 font-medium text-[10px] relative transition">
+                <i class="fa-solid fa-layer-group text-sm mb-1"></i>
+                <span>Контент</span>
+                <span id="navStudioBadge" class="hidden">9</span>
+            </button>
+            <button onclick="instantLaunchGroup(state.selectedGroup || 1)" id="navTabFeed" class="nav-btn flex flex-col items-center justify-center py-1 px-3 text-zinc-500 hover:text-zinc-300 font-medium text-[10px] transition">
+                <i class="fa-solid fa-play text-sm mb-1"></i>
+                <span>Лента</span>
+            </button>
+            <button onclick="switchTab('analytics')" id="navTabAnalytics" class="nav-btn flex flex-col items-center justify-center py-1 px-3 text-zinc-500 hover:text-zinc-300 font-medium text-[10px] relative transition">
+                <i class="fa-regular fa-file-lines text-sm mb-1"></i>
+                <span>Конспекты</span>
+                <span id="navLogsBadge" class="hidden">2</span>
+            </button>
+        </nav>
+
+        <!-- ================================================= -->
+        <!-- MODAL SHEET: ADD VIDEO / PHOTO / PURCHASE / POST  -->
+        <!-- ================================================= -->
+        <div id="addContentModal" class="hidden absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end justify-center">
+            <div class="bg-zinc-950 border-t border-zinc-800 rounded-t-2xl w-full max-h-[92%] flex flex-col shadow-2xl overflow-hidden">
+                <div class="p-3.5 border-b border-zinc-800/80 flex items-center justify-between">
+                    <h3 class="font-semibold text-xs text-zinc-100" id="addModalTitle">Добавить в ленту</h3>
+                    <button onclick="closeAddContentModal()" class="w-6 h-6 rounded-md bg-zinc-900 text-zinc-400 flex items-center justify-center">
+                        <i class="fa-solid fa-xmark text-xs"></i>
+                    </button>
+                </div>
+
+                <div class="p-4 overflow-y-auto custom-scroll space-y-3 text-xs">
+                    <!-- 4 Content Type Selector Tabs -->
+                    <div class="grid grid-cols-4 gap-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+                        <button type="button" onclick="switchAddModalType('video')" id="typeBtnVideo" class="py-1.5 rounded-md font-medium bg-zinc-100 text-zinc-950 transition">Видео</button>
+                        <button type="button" onclick="switchAddModalType('photo')" id="typeBtnPhoto" class="py-1.5 rounded-md font-medium text-zinc-400 hover:text-white transition">Фото</button>
+                        <button type="button" onclick="switchAddModalType('product')" id="typeBtnProduct" class="py-1.5 rounded-md font-medium text-zinc-400 hover:text-white transition">Покупка</button>
+                        <button type="button" onclick="switchAddModalType('other')" id="typeBtnOther" class="py-1.5 rounded-md font-medium text-zinc-400 hover:text-white transition">Пост</button>
+                    </div>
+
+                    <!-- 1. VIDEO UPLOAD / URL FIELDS -->
+                    <div id="videoUploadSection" class="space-y-2.5">
+                        <label class="block border border-dashed border-zinc-700 hover:border-zinc-500 bg-zinc-900/40 rounded-xl p-3.5 text-center cursor-pointer transition">
+                            <input type="file" id="modalVideoFileInput" accept="video/*" class="hidden" onchange="handleSingleVideoFileSelect(event)">
+                            <div class="font-medium text-zinc-200 text-xs" id="selectedVideoFileName">Выбрать видеофайл с устройства</div>
+                            <div class="text-[10px] text-zinc-500 mt-0.5">MP4, MOV, WebM</div>
+                        </label>
+
+                        <input type="url" id="modalVideoUrlInput" placeholder="Или прямая ссылка https://.../video.mp4" oninput="previewModalVideoUrl()" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-zinc-600">
+
+                        <div id="modalVideoPreviewWrap" class="hidden rounded-xl overflow-hidden bg-black border border-zinc-800 h-40 relative flex items-center justify-center">
+                            <video id="modalVideoPreviewEl" class="h-full w-full object-cover" controls playsinline muted loop></video>
+                        </div>
+                    </div>
+
+                    <!-- 2. IMAGE UPLOAD / URL FIELDS (SHARED BY PHOTO & PURCHASE) -->
+                    <div id="imageUploadSection" class="hidden space-y-2.5">
+                        <label class="block border border-dashed border-zinc-700 hover:border-zinc-500 bg-zinc-900/40 rounded-xl p-3.5 text-center cursor-pointer transition">
+                            <input type="file" id="modalImageFileInput" accept="image/*" class="hidden" onchange="handleSingleImageFileSelect(event)">
+                            <div class="font-medium text-zinc-200 text-xs" id="selectedImageFileName">Выбрать фото с устройства</div>
+                            <div class="text-[10px] text-zinc-500 mt-0.5">JPG, PNG, WebP</div>
+                        </label>
+
+                        <input type="url" id="modalImageUrlInput" placeholder="Или прямая ссылка на картинку https://..." oninput="previewModalImageUrl()" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-zinc-600">
+
+                        <div id="modalImagePreviewWrap" class="hidden rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 h-40 relative flex items-center justify-center">
+                            <img id="modalImagePreviewEl" class="h-full w-full object-contain" alt="Предпросмотр">
+                        </div>
+                    </div>
+
+                    <!-- 3. PURCHASE / PRODUCT SPECIFIC FIELDS -->
+                    <div id="productDetailsSection" class="hidden space-y-2.5">
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-[10px] text-zinc-500 mb-1">Цена</label>
+                                <input type="text" id="modalProductPrice" value="2 490 ₽" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-zinc-500 mb-1">Старая цена</label>
+                                <input type="text" id="modalProductOldPrice" value="4 990 ₽" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-[10px] text-zinc-500 mb-1">Магазин / Площадка</label>
+                                <input type="text" id="modalProductShopName" value="Маркетплейс" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-zinc-500 mb-1">Кнопка</label>
+                                <input type="text" id="modalProductBtnText" value="Купить" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- COMMON METADATA FIELDS -->
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 mb-1">Заголовок</label>
+                        <input type="text" id="modalTitleInput" placeholder="Название видео, фото или товара" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:border-zinc-600 focus:outline-none">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-[10px] text-zinc-500 mb-1">Автор / Бренд</label>
+                            <input type="text" id="modalAuthorInput" value="@channel" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] text-zinc-500 mb-1">Ключевые слова (для опроса)</label>
+                            <input type="text" id="modalKeywordsInput" placeholder="кроссовки, закат..." class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 mb-1">Описание</label>
+                        <input type="text" id="modalSubtitleInput" placeholder="Короткая подпись под карточкой" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white">
+                    </div>
+
+                    <label class="flex items-center justify-between p-2.5 rounded-lg bg-zinc-900 border border-zinc-800 cursor-pointer">
+                        <span class="text-zinc-300 text-xs">Показывать в 4-й группе</span>
+                        <input type="checkbox" id="modalInGroup4Check" checked class="w-4 h-4 accent-zinc-100 rounded">
+                    </label>
+
+                    <button onclick="saveCustomContentItem()" class="w-full py-2.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs transition">
+                        Сохранить в ленту
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================================================= -->
+        <!-- MODAL SHEET: BOTHOST DEPLOYMENT GUIDE             -->
+        <!-- ================================================= -->
+        <div id="botHostModal" class="hidden absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end justify-center">
+            <div class="bg-zinc-950 border-t border-zinc-800 rounded-t-2xl w-full max-h-[90%] flex flex-col shadow-2xl overflow-hidden">
+                <div class="p-3.5 border-b border-zinc-800/80 flex items-center justify-between">
+                    <h3 class="font-semibold text-xs text-zinc-100">Запуск на BotHost (bothost.ru)</h3>
+                    <button onclick="closeBotHostModal()" class="w-6 h-6 rounded-md bg-zinc-900 text-zinc-400 flex items-center justify-center">
+                        <i class="fa-solid fa-xmark text-xs"></i>
+                    </button>
+                </div>
+                <div class="p-4 overflow-y-auto custom-scroll space-y-3 text-xs text-zinc-300">
+                    <div class="bg-zinc-900/60 border border-zinc-800 rounded-xl p-3 space-y-1.5">
+                        <div class="font-semibold text-zinc-100">1. Хостинг Mini-App</div>
+                        <p class="text-[11px] text-zinc-400 leading-relaxed">
+                            Сохраните этот файл как <code class="text-zinc-200 font-mono">index.html</code> и загрузите в раздел Mini-App / статического сайта на <strong>bothost.ru</strong>. Скопируйте выданный HTTPS-адрес.
+                        </p>
+                    </div>
+                    <div class="bg-zinc-900/60 border border-zinc-800 rounded-xl p-3 space-y-1.5">
+                        <div class="font-semibold text-zinc-100">2. Авто-отправка конспектов в Telegram</div>
+                        <p class="text-[11px] text-zinc-400 leading-relaxed">
+                            Когда участник завершает опрос, приложение автоматически отправляет готовый конспект боту через <code class="text-zinc-200 font-mono">Telegram.WebApp.sendData()</code>. Также на каждом конспекте есть кнопка <strong>«В ТГ»</strong>.
+                        </p>
+                    </div>
+                    <div class="space-y-1.5">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] text-zinc-400 font-mono">bot.py (aiogram 3 для BotHost)</span>
+                            <button onclick="copyBotHostPythonCode()" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[10px]">Копировать код</button>
+                        </div>
+                        <pre id="botHostPythonSnippet" class="bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 text-[10px] font-mono text-zinc-300 overflow-x-auto leading-relaxed">import asyncio, json
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import CommandStart
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+
+TOKEN = "ВАШ_ТОКЕН_БОТА"
+WEBAPP_URL = "https://ВАШ_ДОМЕН.bothost.ru"
+ADMIN_ID = 123456789  # Ваш Telegram ID для получения конспектов
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+@dp.message(CommandStart())
+async def cmd_start(msg: types.Message):
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Открыть ленту", web_app=WebAppInfo(url=WEBAPP_URL))]],
+        resize_keyboard=True
+    )
+    await msg.answer("Нажмите кнопку ниже, чтобы начать:", reply_markup=kb)
+
+@dp.message(F.web_app_data)
+async def on_webapp_data(msg: types.Message):
+    data = json.loads(msg.web_app_data.data)
+    summary = data.get("summaryText", "Нет данных")
+    await msg.answer("Спасибо! Ответы записаны.")
+    await bot.send_message(ADMIN_ID, summary)
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Global Mini-Toast inside TMA -->
+        <div id="tmaToast" class="hidden absolute top-14 left-1/2 -translate-x-1/2 z-50 px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-950 font-medium text-xs shadow-xl flex items-center gap-1.5 whitespace-nowrap">
+            <span id="tmaToastText">Сохранено</span>
+        </div>
+
+    </div>
+
+    <script>
+        // =========================================================================
+        // 1. TELEGRAM WEBAPP SDK & INDEXEDDB STORAGE (VIDEOS + PHOTOS + PRODUCTS)
+        // =========================================================================
+        const tg = window.Telegram?.WebApp;
+        if (tg) {
+            try {
+                tg.ready();
+                tg.expand();
+            } catch (e) {}
+        }
+
+        function triggerHaptic(type = 'light') {
+            try {
+                tg?.HapticFeedback?.impactOccurred(type);
+            } catch (e) {}
+        }
+
+        const DB_NAME = 'neurofeed_bothost_media_db';
+        const DB_STORE = 'media_blobs';
+
+        function openMediaDB() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, 1);
+                req.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(DB_STORE)) {
+                        db.createObjectStore(DB_STORE);
+                    }
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function saveMediaBlobToDB(key, blob) {
+            try {
+                const db = await openMediaDB();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction(DB_STORE, 'readwrite');
+                    tx.objectStore(DB_STORE).put(blob, key);
+                    tx.oncomplete = () => resolve(true);
+                    tx.onerror = () => reject(tx.error);
+                });
+            } catch (e) {
+                return false;
+            }
+        }
+
+        async function getMediaBlobFromDB(key) {
+            try {
+                const db = await openMediaDB();
+                return new Promise((resolve) => {
+                    const tx = db.transaction(DB_STORE, 'readonly');
+                    const req = tx.objectStore(DB_STORE).get(key);
+                    req.onsuccess = () => resolve(req.result || null);
+                    req.onerror = () => resolve(null);
+                });
+            } catch (e) {
+                return null;
+            }
+        }
+
+        const blobUrlCache = {};
+
+        // =========================================================================
+        // 2. DEFAULT FEED ITEMS (NO AI-GENERATED CANVAS VIDEOS!)
+        // =========================================================================
+        const DEFAULT_FEED_ITEMS = [
+            {
+                id: 'v1',
+                type: 'video',
+                typeLabel: 'Видео',
+                isCustom: false,
+                inGroup4: true,
+                author: '@auto_clips',
+                title: 'Ночной заезд по горному серпантину',
+                subtitle: 'Камера на бампере, чистый звук мотора #авто #дорога',
+                videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+                likes: '142.5K',
+                keywords: ['заезд', 'серпантин', 'машина', 'авто', 'видео'],
+                comments: [{ user: 'Максим', text: 'Отличная съемка!' }]
+            },
+            {
+                id: 'p1',
+                type: 'product',
+                typeLabel: 'Покупка',
+                isCustom: false,
+                inGroup4: true,
+                author: '@lumina_shop',
+                shopName: 'Маркетплейс',
+                btnText: 'Купить',
+                title: 'Настольная лампа-луна 3D на деревянной подставке',
+                subtitle: 'Тёплый и холодный свет, сенсорное управление и зарядка по USB-C',
+                imageUrl: 'https://images.unsplash.com/photo-1513506003901-1e6a229e2d15?auto=format&fit=crop&w=800&q=80',
+                price: '2 490 ₽',
+                oldPrice: '4 990 ₽',
+                likes: '54.1K',
+                keywords: ['лампа', 'луна', 'светильник', 'покупка', 'товар'],
+                comments: [{ user: 'Алина', text: 'Взяла такую в спальню, светит очень уютно!' }]
+            },
+            {
+                id: 'ph1',
+                type: 'photo',
+                typeLabel: 'Фото',
+                isCustom: false,
+                inGroup4: true,
+                author: '@nordic_frames',
+                title: 'Рассвет над горным озером в тумане',
+                subtitle: 'Снято на 35mm плёнку в 5 утра без обработки #фото #природа',
+                imageUrl: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=900&q=80',
+                likes: '89.3K',
+                keywords: ['озеро', 'горы', 'рассвет', 'туман', 'фото'],
+                comments: [{ user: 'Лена', text: 'Спокойный кадр, хочется туда' }]
+            },
+            {
+                id: 'v2',
+                type: 'video',
+                typeLabel: 'Видео',
+                isCustom: false,
+                inGroup4: true,
+                author: '@travel_reels',
+                title: 'Побег из города на побережье океана',
+                subtitle: 'Короткий ролик из поездки выходного дня #путешествия',
+                videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
+                likes: '210.8K',
+                keywords: ['океан', 'поездка', 'город', 'побережье'],
+                comments: [{ user: 'Игорь', text: 'Крутой монтаж' }]
+            },
+            {
+                id: 'p2',
+                type: 'product',
+                typeLabel: 'Покупка',
+                isCustom: false,
+                inGroup4: true,
+                author: '@desk_minimal',
+                shopName: 'Ozon / WB',
+                btnText: 'Заказать',
+                title: 'Компактная механическая клавиатура 75%',
+                subtitle: 'Тихие линейные свитчи, подсветка и подключение к 3 устройствам',
+                imageUrl: 'https://images.unsplash.com/photo-1595225476474-87563907a212?auto=format&fit=crop&w=800&q=80',
+                price: '3 890 ₽',
+                oldPrice: '5 500 ₽',
+                likes: '98.4K',
+                keywords: ['клавиатура', 'механическая', 'рабочий стол', 'покупка'],
+                comments: [{ user: 'Денис', text: 'Тайпинг максимально приятный' }]
+            },
+            {
+                id: 'ph2',
+                type: 'photo',
+                typeLabel: 'Фото',
+                isCustom: false,
+                inGroup4: true,
+                author: '@coffee_notes',
+                title: 'Утренний фильтр-кофе и свежий круассан',
+                subtitle: 'Небольшая кофейня в центре города #кофе #утро',
+                imageUrl: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=900&q=80',
+                likes: '67.2K',
+                keywords: ['кофе', 'круассан', 'утро', 'кофейня', 'фото'],
+                comments: [{ user: 'Катя', text: 'Сразу захотелось кофе' }]
+            },
+            {
+                id: 'o1',
+                type: 'other',
+                typeLabel: 'Пост',
+                isCustom: false,
+                inGroup4: false,
+                author: '@science_notes',
+                title: 'У осьминогов три сердца и голубая кровь',
+                subtitle: 'Два сердца перекачивают кровь через жабры, а третье снабжает всё тело.',
+                likes: '74.9K',
+                keywords: ['осьминог', 'сердца', 'кровь', 'факт'],
+                comments: [{ user: 'Биолог', text: 'Голубой оттенок из-за меди в составе' }]
+            },
+            {
+                id: 'p3',
+                type: 'product',
+                typeLabel: 'Покупка',
+                isCustom: false,
+                inGroup4: false,
+                author: '@sound_gear',
+                shopName: 'Маркетплейс',
+                btnText: 'В корзину',
+                title: 'Беспроводные наушники с шумоподавлением',
+                subtitle: 'До 40 часов работы от одного заряда и складной чехол в комплекте',
+                imageUrl: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=800&q=80',
+                price: '4 290 ₽',
+                oldPrice: '6 990 ₽',
+                likes: '112.0K',
+                keywords: ['наушники', 'звук', 'беспроводные', 'покупка'],
+                comments: [{ user: 'Ольга', text: 'Шумодав в метро спасает' }]
+            },
+            {
+                id: 'v3',
+                type: 'video',
+                typeLabel: 'Видео',
+                isCustom: false,
+                inGroup4: false,
+                author: '@city_motion',
+                title: 'Вечерние огни мегаполиса в движении',
+                subtitle: 'Динамичный ролик со съемочной площадки #город #вечер',
+                videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoy.mp4',
+                likes: '194.3K',
+                keywords: ['мегаполис', 'огни', 'вечер', 'город'],
+                comments: [{ user: 'Артём', text: 'Атмосферно!' }]
+            }
+        ];
+
+        // Distractors for Step 3 Recognition Test (Never shown in feed)
+        const DISTRACTOR_ITEMS = [
+            { id: 'd1', type: 'video', typeLabel: 'Видео', title: 'Прыжок с парашютом над заснеженными горами', subtitle: 'Экстремальный полет в вингсьюте' },
+            { id: 'd2', type: 'product', typeLabel: 'Покупка', title: 'Робот-мойщик окон с распылителем воды', subtitle: 'Умный гаджет для квартиры (6 490 ₽)' },
+            { id: 'd3', type: 'photo', typeLabel: 'Фото', title: 'Красная телефонная будка на туманной улице Лондона', subtitle: 'Уличная фотография после дождя' },
+            { id: 'd4', type: 'product', typeLabel: 'Покупка', title: 'Термокружка с индикатором температуры на крышке', subtitle: 'Держит тепло до 12 часов (1 390 ₽)' },
+            { id: 'd5', type: 'other', typeLabel: 'Пост', title: 'На Венере сутки длиннее, чем один венерианский год', subtitle: 'Планета вращается вокруг своей оси крайне медленно' }
+        ];
+
+        // 4 Experimental Groups Metadata (Milana's Schema)
+        const GROUP_INFO = {
+            1: {
+                id: 1,
+                name: '1 группа',
+                shortTitle: 'Просто листают (часы видны)',
+                showClock: true,
+                allowCounting: true,
+                limitedFeed: false,
+                ruleToast: 'Таймер открыт • Листайте ленту свободно'
+            },
+            2: {
+                id: 2,
+                name: '2 группа',
+                shortTitle: 'Время скрыто, считать нельзя',
+                showClock: false,
+                allowCounting: false,
+                limitedFeed: false,
+                ruleToast: 'Часы скрыты • НЕ считайте секунды про себя'
+            },
+            3: {
+                id: 3,
+                name: '3 группа',
+                shortTitle: 'Время скрыто, считать можно',
+                showClock: false,
+                allowCounting: true,
+                limitedFeed: false,
+                ruleToast: 'Часы скрыты • МОЖНО считать секунды про себя'
+            },
+            4: {
+                id: 4,
+                name: '4 группа',
+                shortTitle: 'Лента ограничена, считать нельзя',
+                showClock: false,
+                allowCounting: false,
+                limitedFeed: true,
+                ruleToast: 'Ограниченная выборка • Считать про себя нельзя'
+            }
+        };
+
+        // Pre-populated Demo Participant Summaries ("Конспекты")
+        const DEMO_SESSIONS = [
+            {
+                id: 'demo_1',
+                timestamp: 'Сегодня, 14:20',
+                participant: 'Аня (@anya_psy)',
+                group: 2,
+                actualSec: 46.2,
+                perceivedSec: 35,
+                timeErrorSec: -11.2,
+                timeErrorPct: -24.2,
+                countingAnswer: 'Нет, не считал(а)',
+                freeRecallText: 'лампа луна, фото озера в тумане, клавиатура',
+                freeRecallMatchedTitles: ['Настольная лампа-луна 3D на деревянной подставке', 'Рассвет над горным озером в тумане', 'Компактная механическая клавиатура 75%'],
+                freeRecallCount: 3,
+                viewedItemsCount: 6,
+                hitCount: 5,
+                missedTitles: ['Утренний фильтр-кофе и свежий круассан'],
+                falseAlarmTitles: [],
+                hitRatePct: 83,
+                shopRecallPct: 100,
+                watchedLog: [
+                    { id: 'p1', title: 'Настольная лампа-луна 3D на деревянной подставке', typeLabel: 'Покупка', dwellSec: 12.4, views: 1, liked: true, bought: true, remembered: true },
+                    { id: 'ph1', title: 'Рассвет над горным озером в тумане', typeLabel: 'Фото', dwellSec: 10.8, views: 1, liked: true, bought: false, remembered: true },
+                    { id: 'v1', title: 'Ночной заезд по горному серпантину', typeLabel: 'Видео', dwellSec: 9.1, views: 1, liked: false, bought: false, remembered: true },
+                    { id: 'p2', title: 'Компактная механическая клавиатура 75%', typeLabel: 'Покупка', dwellSec: 7.5, views: 1, liked: false, bought: false, remembered: true },
+                    { id: 'v2', title: 'Побег из города на побережье океана', typeLabel: 'Видео', dwellSec: 5.1, views: 1, liked: false, bought: false, remembered: true },
+                    { id: 'ph2', title: 'Утренний фильтр-кофе и свежий круассан', typeLabel: 'Фото', dwellSec: 1.3, views: 1, liked: false, bought: false, remembered: false }
+                ],
+                summaryText: `📋 КОНСПЕКТ: Аня (@anya_psy) — 2 группа (Время скрыто, считать нельзя)
+⏱ Время в ленте: провела 46.2 сек, но оценила как 35 сек (недооценка времени на -11.2 сек / -24.2%). Секунды про себя не считала.
+🎬 Просмотр (6 карточек): дольше всего смотрела покупку «Настольная лампа-луна 3D» (12.4 с, ❤️ лайк, 🛒 клик купить), фото «Рассвет над горным озером» (10.8 с, ❤️ лайк) и видео «Ночной заезд» (9.1 с). Быстро пролистнула: «Утренний фильтр-кофе» (1.3 с).
+🧠 Опрос памяти: своими словами вспомнила 3 сюжета («лампа луна, фото озера в тумане, клавиатура»). В тесте узнала 5 из 6 просмотренных карточек (83%), ошибок-ловушек: 0.`
+            }
+        ];
+
+        // =========================================================================
+        // 3. APPLICATION STATE
+        // =========================================================================
+        let state = {
+            activeTab: 'start',
+            selectedGroup: 1,
+            durationLimitSec: 0,
+            isGlobalMuted: false,
+            isDesktopExpanded: false,
+            participantCounter: 1,
+            participantName: 'Участник #1',
+            feedPool: [],
+            addModalType: 'video',
+            pendingVideoBlob: null,
+            pendingImageBlob: null,
+            // Active Session Telemetry
+            isFeedRunning: false,
+            feedStartMs: 0,
+            actualDurationSec: 0,
+            renderedFeedList: [],
+            currentSlideIdx: 0,
+            currentCardId: null,
+            lastSlideEnterMs: 0,
+            dwellByCardId: {},
+            viewsByCardId: {},
+            watchOrderIds: [],
+            seenCardIds: new Set(),
+            likedCardIds: new Set(),
+            boughtCardIds: new Set(),
+            commentedCardIds: new Set(),
+            activeCommentsCardId: null,
+            feedTimerInterval: null,
+            feedObserver: null,
+            // Survey state
+            recognitionPool: [],
+            recognitionTargets: [],
+            recognitionSelectedIds: new Set(),
+            freeRecallMatchedIds: new Set()
+        };
+
+        // Auto-detect Telegram Mini App user on startup
+        function initTelegramUserIdentity() {
+            const u = tg?.initDataUnsafe?.user;
+            if (u) {
+                const fullName = [u.first_name, u.last_name].filter(Boolean).join(' ');
+                const label = u.username ? `${fullName} (@${u.username})` : fullName;
+                if (label) {
+                    state.participantName = label;
+                    const inp = document.getElementById('participantNameInput');
+                    if (inp) inp.value = label;
+                }
+            }
+        }
+
+        // =========================================================================
+        // 4. PERSISTENCE: LOAD & SAVE FEED ITEMS + MEDIA BLOBS
+        // =========================================================================
+        async function loadFeedPoolFromStorage() {
+            try {
+                const raw = localStorage.getItem('neurofeed_bothost_pool_v1');
+                if (raw) {
+                    state.feedPool = JSON.parse(raw);
+                } else {
+                    state.feedPool = JSON.parse(JSON.stringify(DEFAULT_FEED_ITEMS));
+                }
+            } catch (e) {
+                state.feedPool = JSON.parse(JSON.stringify(DEFAULT_FEED_ITEMS));
+            }
+
+            for (const item of state.feedPool) {
+                if (item.hasStoredBlob) {
+                    const blob = await getMediaBlobFromDB(item.id);
+                    if (blob) {
+                        blobUrlCache[item.id] = URL.createObjectURL(blob);
+                    }
+                }
+            }
+            updateAllCountsUI();
+            renderStudioItemsList();
+        }
+
+        function saveFeedPoolToStorage() {
+            try {
+                localStorage.setItem('neurofeed_bothost_pool_v1', JSON.stringify(state.feedPool));
+            } catch (e) {}
+            updateAllCountsUI();
+            renderStudioItemsList();
+        }
+
+        function updateAllCountsUI() {
+            const total = state.feedPool.length;
+            const g4Count = state.feedPool.filter(i => i.inGroup4).length;
+            const sessionsCount = getSavedSessionsList().length;
+
+            const startPoolEl = document.getElementById('startPoolCount');
+            if (startPoolEl) startPoolEl.textContent = total;
+            const startG4El = document.getElementById('startG4Count');
+            if (startG4El) startG4El.textContent = g4Count;
+            const startLogsEl = document.getElementById('startLogsCount');
+            if (startLogsEl) startLogsEl.textContent = sessionsCount;
+
+            document.getElementById('studioCountBadge').textContent = `${total} шт.`;
+            document.getElementById('navStudioBadge').textContent = total;
+            document.getElementById('group4SubsetCount').textContent = `${g4Count} шт.`;
+            const navLogsEl = document.getElementById('navLogsBadge');
+            if (navLogsEl) navLogsEl.textContent = sessionsCount;
+        }
+
+        // =========================================================================
+        // 5. CONTENT UPLOADER: VIDEO, PHOTO, PURCHASE, POST
+        // =========================================================================
+        function openAddContentModal(defaultType = 'video') {
+            triggerHaptic('light');
+            state.pendingVideoBlob = null;
+            state.pendingImageBlob = null;
+
+            document.getElementById('modalVideoFileInput').value = '';
+            document.getElementById('modalVideoUrlInput').value = '';
+            document.getElementById('selectedVideoFileName').textContent = 'Выбрать видеофайл с устройства';
+            document.getElementById('modalVideoPreviewWrap').classList.add('hidden');
+
+            document.getElementById('modalImageFileInput').value = '';
+            document.getElementById('modalImageUrlInput').value = '';
+            document.getElementById('selectedImageFileName').textContent = 'Выбрать фото с устройства';
+            document.getElementById('modalImagePreviewWrap').classList.add('hidden');
+
+            document.getElementById('modalTitleInput').value = '';
+            document.getElementById('modalKeywordsInput').value = '';
+            document.getElementById('modalSubtitleInput').value = '';
+
+            switchAddModalType(defaultType);
+            document.getElementById('addContentModal').classList.remove('hidden');
+        }
+
+        function closeAddContentModal() {
+            const previewEl = document.getElementById('modalVideoPreviewEl');
+            if (previewEl) previewEl.pause();
+            document.getElementById('addContentModal').classList.add('hidden');
+        }
+
+        function switchAddModalType(type) {
+            state.addModalType = type;
+            const map = {
+                video: 'typeBtnVideo',
+                photo: 'typeBtnPhoto',
+                product: 'typeBtnProduct',
+                other: 'typeBtnOther'
+            };
+
+            Object.entries(map).forEach(([k, id]) => {
+                const btn = document.getElementById(id);
+                if (!btn) return;
+                btn.className = k === type
+                    ? 'py-1.5 rounded-md font-medium bg-zinc-100 text-zinc-950 transition'
+                    : 'py-1.5 rounded-md font-medium text-zinc-400 hover:text-white transition';
+            });
+
+            const vidSec = document.getElementById('videoUploadSection');
+            const imgSec = document.getElementById('imageUploadSection');
+            const prodSec = document.getElementById('productDetailsSection');
+
+            if (type === 'video') {
+                document.getElementById('addModalTitle').textContent = 'Добавить видео';
+                vidSec.classList.remove('hidden');
+                imgSec.classList.add('hidden');
+                prodSec.classList.add('hidden');
+            } else if (type === 'photo') {
+                document.getElementById('addModalTitle').textContent = 'Добавить фото';
+                vidSec.classList.add('hidden');
+                imgSec.classList.remove('hidden');
+                prodSec.classList.add('hidden');
+            } else if (type === 'product') {
+                document.getElementById('addModalTitle').textContent = 'Добавить покупку (товар)';
+                vidSec.classList.add('hidden');
+                imgSec.classList.remove('hidden');
+                prodSec.classList.remove('hidden');
+            } else {
+                document.getElementById('addModalTitle').textContent = 'Добавить текстовый пост';
+                vidSec.classList.add('hidden');
+                imgSec.classList.add('hidden');
+                prodSec.classList.add('hidden');
+            }
+        }
+
+        function handleSingleVideoFileSelect(event) {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            state.pendingVideoBlob = file;
+            document.getElementById('selectedVideoFileName').textContent = `Выбрано: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} МБ)`;
+
+            autoFillTitleAndKeywordsFromFileName(file.name);
+
+            const previewUrl = URL.createObjectURL(file);
+            const previewWrap = document.getElementById('modalVideoPreviewWrap');
+            const previewEl = document.getElementById('modalVideoPreviewEl');
+            previewEl.src = previewUrl;
+            previewWrap.classList.remove('hidden');
+            previewEl.play().catch(() => {});
+        }
+
+        function previewModalVideoUrl() {
+            const url = document.getElementById('modalVideoUrlInput').value.trim();
+            const previewWrap = document.getElementById('modalVideoPreviewWrap');
+            const previewEl = document.getElementById('modalVideoPreviewEl');
+            if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+                previewEl.src = url;
+                previewWrap.classList.remove('hidden');
+                previewEl.play().catch(() => {});
+            } else {
+                previewWrap.classList.add('hidden');
+            }
+        }
+
+        function handleSingleImageFileSelect(event) {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            state.pendingImageBlob = file;
+            document.getElementById('selectedImageFileName').textContent = `Выбрано: ${file.name}`;
+
+            autoFillTitleAndKeywordsFromFileName(file.name);
+
+            const previewUrl = URL.createObjectURL(file);
+            const previewWrap = document.getElementById('modalImagePreviewWrap');
+            const previewEl = document.getElementById('modalImagePreviewEl');
+            previewEl.src = previewUrl;
+            previewWrap.classList.remove('hidden');
+        }
+
+        function previewModalImageUrl() {
+            const url = document.getElementById('modalImageUrlInput').value.trim();
+            const previewWrap = document.getElementById('modalImagePreviewWrap');
+            const previewEl = document.getElementById('modalImagePreviewEl');
+            if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+                previewEl.src = url;
+                previewWrap.classList.remove('hidden');
+            } else {
+                previewWrap.classList.add('hidden');
+            }
+        }
+
+        function autoFillTitleAndKeywordsFromFileName(fileName) {
+            const cleanName = fileName.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+            const titleInput = document.getElementById('modalTitleInput');
+            if (!titleInput.value.trim()) {
+                titleInput.value = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+            }
+            const kwInput = document.getElementById('modalKeywordsInput');
+            if (!kwInput.value.trim()) {
+                const words = cleanName.split(/\s+/).filter(w => w.length > 2).slice(0, 4);
+                kwInput.value = words.join(', ') || cleanName;
+            }
+        }
+
+        async function saveCustomContentItem() {
+            const type = state.addModalType;
+            const defaultTitles = {
+                video: 'Моё видео',
+                photo: 'Моё фото',
+                product: 'Товар из маркетплейса',
+                other: 'Заметка в ленте'
+            };
+            const typeLabels = {
+                video: 'Видео',
+                photo: 'Фото',
+                product: 'Покупка',
+                other: 'Пост'
+            };
+
+            const title = document.getElementById('modalTitleInput').value.trim() || defaultTitles[type];
+            const author = document.getElementById('modalAuthorInput').value.trim() || '@channel';
+            const subtitle = document.getElementById('modalSubtitleInput').value.trim() || '';
+            const rawKw = document.getElementById('modalKeywordsInput').value.trim();
+            const keywords = rawKw
+                ? rawKw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+                : title.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+
+            const inGroup4 = document.getElementById('modalInGroup4Check').checked;
+            const newId = 'custom_' + Date.now() + '_' + Math.floor(Math.random() * 999);
+
+            const newItem = {
+                id: newId,
+                type,
+                typeLabel: typeLabels[type],
+                isCustom: true,
+                inGroup4,
+                author: author.startsWith('@') ? author : '@' + author,
+                title,
+                subtitle,
+                likes: '12.4K',
+                keywords: keywords.length ? keywords : [title.toLowerCase()],
+                comments: [{ user: 'Участник', text: 'Интересно!' }]
+            };
+
+            if (type === 'video') {
+                const videoUrl = document.getElementById('modalVideoUrlInput').value.trim();
+                if (state.pendingVideoBlob) {
+                    newItem.hasStoredBlob = true;
+                    newItem.mediaMime = state.pendingVideoBlob.type || 'video/mp4';
+                    blobUrlCache[newId] = URL.createObjectURL(state.pendingVideoBlob);
+                    await saveMediaBlobToDB(newId, state.pendingVideoBlob);
+                } else if (videoUrl) {
+                    newItem.videoUrl = videoUrl;
+                }
+            } else if (type === 'photo' || type === 'product') {
+                const imageUrl = document.getElementById('modalImageUrlInput').value.trim();
+                if (state.pendingImageBlob) {
+                    newItem.hasStoredBlob = true;
+                    newItem.mediaMime = state.pendingImageBlob.type || 'image/jpeg';
+                    blobUrlCache[newId] = URL.createObjectURL(state.pendingImageBlob);
+                    await saveMediaBlobToDB(newId, state.pendingImageBlob);
+                } else if (imageUrl) {
+                    newItem.imageUrl = imageUrl;
+                }
+
+                if (type === 'product') {
+                    newItem.price = document.getElementById('modalProductPrice').value.trim() || '1 990 ₽';
+                    newItem.oldPrice = document.getElementById('modalProductOldPrice').value.trim() || '';
+                    newItem.shopName = document.getElementById('modalProductShopName').value.trim() || 'Маркетплейс';
+                    newItem.btnText = document.getElementById('modalProductBtnText').value.trim() || 'Купить';
+                }
+            }
+
+            state.feedPool.unshift(newItem);
+            saveFeedPoolToStorage();
+            closeAddContentModal();
+            switchTab('studio');
+            showTmaToast('Добавлено в начало ленты');
+        }
+
+        // Batch upload multiple videos or photos at once
+        async function handleQuickMultiUpload(event, targetType) {
+            const files = Array.from(event.target.files || []);
+            if (!files.length) return;
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+                const title = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+                const newId = 'custom_batch_' + Date.now() + '_' + i;
+
+                blobUrlCache[newId] = URL.createObjectURL(file);
+                await saveMediaBlobToDB(newId, file);
+
+                const words = cleanName.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+
+                state.feedPool.unshift({
+                    id: newId,
+                    type: targetType,
+                    typeLabel: targetType === 'video' ? 'Видео' : 'Фото',
+                    isCustom: true,
+                    inGroup4: true,
+                    hasStoredBlob: true,
+                    mediaMime: file.type,
+                    author: '@my_feed',
+                    title: title || (targetType === 'video' ? `Видео #${i + 1}` : `Фото #${i + 1}`),
+                    subtitle: '',
+                    likes: '15.0K',
+                    keywords: words.length ? words : [cleanName.toLowerCase()],
+                    comments: [{ user: 'Зритель', text: 'Класс!' }]
+                });
+            }
+
+            event.target.value = '';
+            saveFeedPoolToStorage();
+            showTmaToast(`Загружено файлов: ${files.length} шт.`);
+        }
+
+        function renderStudioItemsList() {
+            const listEl = document.getElementById('studioItemsList');
+            if (!listEl) return;
+
+            if (state.feedPool.length === 0) {
+                listEl.innerHTML = `
+                    <div class="p-6 rounded-xl bg-zinc-900/40 border border-zinc-800/80 text-center space-y-1">
+                        <div class="text-xs font-medium text-zinc-300">Лента пуста</div>
+                        <p class="text-[11px] text-zinc-500">Добавьте видео, фото или товары кнопками выше.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            listEl.innerHTML = state.feedPool.map((item, idx) => {
+                const mediaSrc = blobUrlCache[item.id] || item.videoUrl || item.imageUrl || '';
+
+                let thumbHtml = `<i class="fa-solid fa-align-left text-zinc-500 text-xs"></i>`;
+                if (item.type === 'video') {
+                    thumbHtml = mediaSrc
+                        ? `<video src="${mediaSrc}" class="w-full h-full object-cover" muted loop playsinline onmouseover="this.play()" onmouseout="this.pause()"></video>`
+                        : `<i class="fa-solid fa-video text-zinc-500 text-xs"></i>`;
+                } else if (item.type === 'photo' || item.type === 'product') {
+                    thumbHtml = mediaSrc
+                        ? `<img src="${mediaSrc}" class="w-full h-full object-cover" alt="">`
+                        : `<i class="fa-solid ${item.type === 'product' ? 'fa-bag-shopping' : 'fa-image'} text-zinc-500 text-xs"></i>`;
+                }
+
+                return `
+                    <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-2.5 flex items-center gap-2.5">
+                        <!-- Mini Thumbnail -->
+                        <div class="w-11 h-14 rounded-lg bg-zinc-950 border border-zinc-800 overflow-hidden shrink-0 flex items-center justify-center relative">
+                            ${thumbHtml}
+                        </div>
+
+                        <!-- Item Info & Controls -->
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[10px] font-mono text-zinc-500">#${idx + 1} · ${item.typeLabel}</span>
+                                ${item.type === 'product' && item.price ? `<span class="text-[10px] font-mono text-zinc-300">· ${item.price}</span>` : ''}
+                                ${item.isCustom ? `<span class="px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-300 text-[9px]">своё</span>` : ''}
+                            </div>
+                            <div class="font-medium text-xs text-zinc-100 truncate mt-0.5">${item.title}</div>
+
+                            <div class="flex items-center justify-between mt-1.5 pt-1.5 border-t border-zinc-800/60">
+                                <label class="flex items-center gap-1.5 text-[10px] cursor-pointer text-zinc-400">
+                                    <input type="checkbox" ${item.inGroup4 ? 'checked' : ''} onchange="toggleItemGroup4('${item.id}')" class="accent-zinc-200 rounded">
+                                    <span>4 гр.</span>
+                                </label>
+
+                                <div class="flex items-center gap-1">
+                                    <button onclick="movePoolItem(${idx}, -1)" class="w-5 h-5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 text-[10px]">↑</button>
+                                    <button onclick="movePoolItem(${idx}, 1)" class="w-5 h-5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 text-[10px]">↓</button>
+                                    <button onclick="deletePoolItem('${item.id}')" class="w-5 h-5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-500 hover:text-rose-400 text-[10px]">
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleItemGroup4(itemId) {
+            const item = state.feedPool.find(i => i.id === itemId);
+            if (item) {
+                item.inGroup4 = !item.inGroup4;
+                saveFeedPoolToStorage();
+            }
+        }
+
+        function movePoolItem(idx, dir) {
+            const target = idx + dir;
+            if (target < 0 || target >= state.feedPool.length) return;
+            const temp = state.feedPool[idx];
+            state.feedPool[idx] = state.feedPool[target];
+            state.feedPool[target] = temp;
+            saveFeedPoolToStorage();
+        }
+
+        function deletePoolItem(itemId) {
+            state.feedPool = state.feedPool.filter(i => i.id !== itemId);
+            saveFeedPoolToStorage();
+            showTmaToast('Удалено из ленты');
+        }
+
+        function keepOnlyCustomItems() {
+            const customOnes = state.feedPool.filter(i => i.isCustom);
+            if (customOnes.length === 0) {
+                showTmaToast('Сначала загрузите свои видео, фото или товары');
+                openAddContentModal('video');
+                return;
+            }
+            state.feedPool = customOnes;
+            saveFeedPoolToStorage();
+            showTmaToast(`Оставлены только ваши карточки (${customOnes.length} шт.)`);
+        }
+
+        function restoreDefaultFeed() {
+            const customOnes = state.feedPool.filter(i => i.isCustom);
+            state.feedPool = [...customOnes, ...JSON.parse(JSON.stringify(DEFAULT_FEED_ITEMS))];
+            saveFeedPoolToStorage();
+            showTmaToast('Стандартная выборка восстановлена');
+        }
+
+        // =========================================================================
+        // 6. BOTHOST MODAL & NAVIGATION CONTROLLERS
+        // =========================================================================
+        function openBotHostModal() {
+            document.getElementById('botHostModal').classList.remove('hidden');
+        }
+
+        function closeBotHostModal() {
+            document.getElementById('botHostModal').classList.add('hidden');
+        }
+
+        function copyBotHostPythonCode() {
+            const code = document.getElementById('botHostPythonSnippet').textContent;
+            copyTextToClipboard(code);
+            showTmaToast('Код bot.py скопирован');
+        }
+
+        function nextParticipantNumber() {
+            state.participantCounter++;
+            const inp = document.getElementById('participantNameInput');
+            inp.value = `Участник #${state.participantCounter}`;
+            triggerHaptic('light');
+        }
+
+        function setDurationLimit(sec) {
+            state.durationLimitSec = sec;
+            document.querySelectorAll('.dur-btn').forEach(btn => {
+                const s = parseInt(btn.getAttribute('data-sec'), 10);
+                btn.className = s === sec
+                    ? 'dur-btn px-2 py-1 rounded-md text-[11px] font-medium bg-zinc-100 text-zinc-950'
+                    : 'dur-btn px-2 py-1 rounded-md text-[11px] font-medium bg-zinc-900 text-zinc-400 border border-zinc-800';
+            });
+        }
+
+        function switchTab(tabName) {
+            if (state.activeTab === 'feed' && tabName !== 'feed') {
+                stopAllFeedVideosAndTimers();
+            }
+
+            state.activeTab = tabName;
+            const tabs = {
+                start: 'tabStart',
+                studio: 'tabStudio',
+                feed: 'tabFeed',
+                survey: 'tabSurvey',
+                analytics: 'tabAnalytics'
+            };
+
+            Object.entries(tabs).forEach(([k, id]) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (k === tabName) el.classList.remove('hidden');
+                else el.classList.add('hidden');
+            });
+
+            const navMap = {
+                start: 'navTabStart',
+                studio: 'navTabStudio',
+                feed: 'navTabFeed',
+                analytics: 'navTabAnalytics'
+            };
+            Object.entries(navMap).forEach(([k, id]) => {
+                const btn = document.getElementById(id);
+                if (!btn) return;
+                if (k === tabName) {
+                    btn.classList.add('text-zinc-100');
+                    btn.classList.remove('text-zinc-500');
+                } else {
+                    btn.classList.remove('text-zinc-100');
+                    btn.classList.add('text-zinc-500');
+                }
+            });
+
+            document.getElementById('tmaBackText').textContent = tabName === 'start' ? 'Закрыть' : 'Назад';
+
+            if (tabName === 'analytics') {
+                renderAnalyticsView();
+            }
+            updateAllCountsUI();
+        }
+
+        function handleHeaderBack() {
+            if (state.activeTab === 'feed') {
+                finishFeedAndStartSurvey();
+                return;
+            }
+            if (state.activeTab !== 'start') {
+                switchTab('start');
+            } else {
+                try { tg?.close(); } catch (e) {}
+                showTmaToast('Выберите группу');
+            }
+        }
+
+        function toggleDesktopExpand() {
+            state.isDesktopExpanded = !state.isDesktopExpanded;
+            const frame = document.getElementById('tmaAppFrame');
+            frame.className = state.isDesktopExpanded
+                ? 'w-full h-full bg-[#09090b] flex flex-col overflow-hidden relative transition-all duration-300'
+                : 'w-full h-full sm:w-[420px] sm:h-[92vh] sm:max-h-[860px] sm:rounded-[32px] sm:border sm:border-zinc-800/90 bg-[#09090b] flex flex-col overflow-hidden shadow-2xl relative transition-all duration-300';
+        }
+
+        function toggleGlobalMute() {
+            state.isGlobalMuted = !state.isGlobalMuted;
+            const btn = document.getElementById('headerMuteBtn');
+            btn.innerHTML = state.isGlobalMuted
+                ? '<i class="fa-solid fa-volume-xmark text-[11px] text-zinc-500"></i>'
+                : '<i class="fa-solid fa-volume-high text-[11px] text-zinc-300"></i>';
+
+            document.querySelectorAll('#tiktokFeedContainer video').forEach(v => {
+                v.muted = state.isGlobalMuted;
+            });
+            showTmaToast(state.isGlobalMuted ? 'Звук выключен' : 'Звук включен');
+        }
+
+        // =========================================================================
+        // 7. TIKTOK VERTICAL FEED (REAL VIDEOS, PHOTOS, PURCHASES, POSTS)
+        // =========================================================================
+        function instantLaunchGroup(groupNum) {
+            triggerHaptic('medium');
+            if (state.feedPool.length === 0) {
+                showTmaToast('Добавьте хотя бы одну карточку в ленту');
+                switchTab('studio');
+                return;
+            }
+
+            state.selectedGroup = groupNum;
+            state.participantName = document.getElementById('participantNameInput').value.trim() || `Участник #${state.participantCounter}`;
+
+            const info = GROUP_INFO[groupNum];
+            if (info.limitedFeed) {
+                const sub = state.feedPool.filter(i => i.inGroup4);
+                state.renderedFeedList = sub.length ? sub : state.feedPool.slice(0, 6);
+            } else {
+                state.renderedFeedList = [...state.feedPool, ...state.feedPool, ...state.feedPool];
+            }
+
+            if (info.showClock) {
+                document.getElementById('feedClockBox').classList.remove('hidden');
+                document.getElementById('feedHiddenTimeBox').classList.add('hidden');
+            } else {
+                document.getElementById('feedClockBox').classList.add('hidden');
+                document.getElementById('feedHiddenTimeBox').classList.remove('hidden');
+                document.getElementById('feedGroupRulePill').textContent = `${info.name} • ${info.shortTitle}`;
+            }
+
+            state.isFeedRunning = true;
+            state.feedStartMs = performance.now();
+            state.dwellByCardId = {};
+            state.viewsByCardId = {};
+            state.watchOrderIds = [];
+            state.seenCardIds = new Set();
+            state.likedCardIds = new Set();
+            state.boughtCardIds = new Set();
+            state.commentedCardIds = new Set();
+            state.currentSlideIdx = 0;
+
+            renderFeedSlidesHTML();
+            switchTab('feed');
+
+            const ruleBanner = document.getElementById('feedInstantRuleBanner');
+            document.getElementById('feedInstantRuleTitle').textContent = `${info.name}: ${info.shortTitle}`;
+            document.getElementById('feedInstantRuleSub').textContent = info.ruleToast;
+            ruleBanner.classList.remove('hidden');
+            setTimeout(() => {
+                ruleBanner.classList.add('hidden');
+            }, 2000);
+
+            if (state.renderedFeedList.length > 0) {
+                const first = state.renderedFeedList[0];
+                state.currentCardId = first.id;
+                state.seenCardIds.add(first.id);
+                state.viewsByCardId[first.id] = 1;
+                state.watchOrderIds.push(first.id);
+                state.lastSlideEnterMs = performance.now();
+            }
+
+            if (state.feedTimerInterval) clearInterval(state.feedTimerInterval);
+            state.feedTimerInterval = setInterval(tickFeedTelemetry, 100);
+        }
+
+        function renderFeedSlidesHTML() {
+            const container = document.getElementById('tiktokFeedContainer');
+            const info = GROUP_INFO[state.selectedGroup];
+
+            let html = state.renderedFeedList.map((item, idx) => {
+                const mediaSrc = blobUrlCache[item.id] || item.videoUrl || item.imageUrl || '';
+                const isVideo = item.type === 'video';
+                const isPhoto = item.type === 'photo';
+                const isProduct = item.type === 'product';
+
+                let visualContentHtml = '';
+
+                if (isVideo) {
+                    visualContentHtml = mediaSrc ? `
+                        <video
+                            id="feedVideo_${idx}"
+                            class="w-full h-full object-cover cursor-pointer"
+                            src="${mediaSrc}"
+                            playsinline
+                            loop
+                            ${state.isGlobalMuted ? 'muted' : ''}
+                            onclick="toggleVideoPlayPause(event, ${idx})"
+                            ontimeupdate="updateVideoProgress(${idx}, this)"
+                        ></video>
+                        <div id="playPauseIndicator_${idx}" class="hidden pointer-events-none absolute inset-0 flex items-center justify-center z-20">
+                            <div class="w-12 h-12 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center text-white text-base">
+                                <i class="fa-solid fa-play"></i>
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="w-full h-full bg-zinc-950 flex flex-col items-center justify-center p-6 text-center">
+                            <div class="w-14 h-14 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 text-lg mb-3">
+                                <i class="fa-solid fa-video"></i>
+                            </div>
+                            <span class="text-xs text-zinc-400">Видеофайл не прикреплён</span>
+                        </div>
+                    `;
+                } else if (isPhoto) {
+                    visualContentHtml = mediaSrc ? `
+                        <div class="w-full h-full relative bg-zinc-950 flex items-center justify-center overflow-hidden">
+                            <!-- Soft blurred backdrop so horizontal & vertical photos both look clean -->
+                            <img src="${mediaSrc}" class="absolute inset-0 w-full h-full object-cover blur-2xl opacity-30 scale-110" alt="">
+                            <img src="${mediaSrc}" class="relative z-10 w-full h-full object-contain" alt="${item.title}">
+                        </div>
+                    ` : `
+                        <div class="w-full h-full bg-zinc-950 flex flex-col items-center justify-center p-6 text-center">
+                            <div class="w-14 h-14 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 text-lg mb-3">
+                                <i class="fa-regular fa-image"></i>
+                            </div>
+                            <span class="text-xs text-zinc-400">Фото не прикреплено</span>
+                        </div>
+                    `;
+                } else if (isProduct) {
+                    visualContentHtml = `
+                        <div class="w-full h-full bg-zinc-950 flex flex-col items-center justify-center p-6 pb-36 relative">
+                            <div class="w-56 h-56 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center overflow-hidden mb-3 shadow-xl">
+                                ${mediaSrc
+                                    ? `<img src="${mediaSrc}" class="w-full h-full object-cover" alt="${item.title}">`
+                                    : `<i class="fa-solid fa-bag-shopping text-4xl text-zinc-500"></i>`
+                                }
+                            </div>
+                            <span class="px-2.5 py-0.5 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono text-[10px]">
+                                ${item.shopName || 'Покупка'}
+                            </span>
+                        </div>
+                    `;
+                } else {
+                    visualContentHtml = `
+                        <div class="w-full h-full bg-zinc-950 flex flex-col items-center justify-center p-8 pb-32 text-center">
+                            <div class="max-w-xs bg-zinc-900/70 border border-zinc-800 rounded-2xl p-5 space-y-2">
+                                <span class="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">${item.typeLabel}</span>
+                                <div class="text-base font-semibold text-zinc-100 leading-snug">${item.title}</div>
+                                ${item.subtitle ? `<p class="text-xs text-zinc-400 leading-relaxed">${item.subtitle}</p>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                return `
+                    <div class="feed-slide w-full h-full relative overflow-hidden bg-zinc-950 flex items-center justify-center" data-slide-index="${idx}" data-card-id="${item.id}" ondblclick="handleFeedDoubleTap(event, '${item.id}')">
+                        
+                        ${visualContentHtml}
+
+                        <!-- Right Minimalist Action Bar -->
+                        <div class="absolute right-3 bottom-28 z-20 flex flex-col items-center gap-3.5">
+                            <button onclick="toggleLikeCard('${item.id}', event)" class="flex flex-col items-center">
+                                <div class="like-btn-${item.id} w-9 h-9 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center text-white text-sm transition active:scale-125">
+                                    <i class="fa-solid fa-heart"></i>
+                                </div>
+                                <span class="text-[10px] font-mono text-zinc-300 mt-1">${item.likes}</span>
+                            </button>
+
+                            <button onclick="openFeedComments('${item.id}', event)" class="flex flex-col items-center">
+                                <div class="w-9 h-9 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center text-white text-sm">
+                                    <i class="fa-regular fa-comment"></i>
+                                </div>
+                                <span class="text-[10px] font-mono text-zinc-300 mt-1">${item.comments.length}</span>
+                            </button>
+                        </div>
+
+                        <!-- Bottom Caption & Purchase Overlay -->
+                        <div class="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/75 to-transparent pt-10 pb-4 px-4 pr-14">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-mono text-zinc-200">${item.typeLabel}</span>
+                                <span class="text-xs font-medium text-zinc-300">${item.author}</span>
+                            </div>
+                            <h3 class="text-sm font-semibold text-white leading-snug mb-1">${item.title}</h3>
+                            ${item.subtitle ? `<p class="text-xs text-zinc-400 line-clamp-2 leading-relaxed">${item.subtitle}</p>` : ''}
+
+                            ${isProduct ? `
+                                <div class="mt-2.5 p-2.5 rounded-xl bg-zinc-900/95 backdrop-blur-md border border-zinc-800 flex items-center justify-between gap-2">
+                                    <div class="flex items-baseline gap-2">
+                                        <span class="text-sm font-semibold text-white font-mono">${item.price || ''}</span>
+                                        ${item.oldPrice ? `<span class="text-[10px] text-zinc-500 line-through font-mono">${item.oldPrice}</span>` : ''}
+                                    </div>
+                                    <button onclick="buyProductInFeed('${item.id}', '${item.title.replace(/'/g, '')}', event)" class="buy-btn-${item.id} px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-950 font-semibold text-xs active:scale-95 transition">
+                                        ${item.btnText || 'Купить'}
+                                    </button>
+                                </div>
+                            ` : ''}
+
+                            ${isVideo && mediaSrc ? `
+                                <div class="w-full h-0.5 bg-white/15 rounded-full mt-3 overflow-hidden">
+                                    <div id="vidProg_${idx}" class="h-full bg-white w-0 transition-all duration-100"></div>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            if (info.limitedFeed) {
+                html += `
+                    <div class="feed-slide w-full h-full bg-zinc-950 flex flex-col items-center justify-center p-6 text-center" data-slide-index="${state.renderedFeedList.length}" data-card-id="END_GROUP_4">
+                        <span class="px-2.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono text-[10px] mb-2">4 группа</span>
+                        <h3 class="text-base font-semibold text-white mb-1">Выборка завершена</h3>
+                        <p class="text-xs text-zinc-500 mb-5">Переходим к короткому опросу</p>
+                        <button onclick="finishFeedAndStartSurvey()" class="w-full max-w-[220px] py-2.5 rounded-lg bg-zinc-100 text-zinc-950 font-semibold text-xs">
+                            Перейти к опросу →
+                        </button>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = html;
+            container.scrollTop = 0;
+            container.onscroll = handleFeedScrollEvent;
+
+            setupVideoIntersectionObserver();
+        }
+
+        function setupVideoIntersectionObserver() {
+            if (state.feedObserver) state.feedObserver.disconnect();
+            const container = document.getElementById('tiktokFeedContainer');
+
+            state.feedObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    const video = entry.target;
+                    if (entry.isIntersecting) {
+                        video.muted = state.isGlobalMuted;
+                        video.play().catch(() => {
+                            video.muted = true;
+                            video.play().catch(() => {});
+                        });
+                    } else {
+                        video.pause();
+                    }
+                });
+            }, { root: container, threshold: 0.65 });
+
+            container.querySelectorAll('video').forEach(v => state.feedObserver.observe(v));
+        }
+
+        function toggleVideoPlayPause(event, idx) {
+            const video = document.getElementById(`feedVideo_${idx}`);
+            const ind = document.getElementById(`playPauseIndicator_${idx}`);
+            if (!video) return;
+
+            if (video.paused) {
+                video.play().catch(() => {});
+                if (ind) ind.classList.add('hidden');
+            } else {
+                video.pause();
+                if (ind) ind.classList.remove('hidden');
+            }
+        }
+
+        function updateVideoProgress(idx, videoEl) {
+            const bar = document.getElementById(`vidProg_${idx}`);
+            if (!bar) return;
+            if (videoEl.duration && isFinite(videoEl.duration)) {
+                const pct = (videoEl.currentTime / videoEl.duration) * 100;
+                bar.style.width = `${pct}%`;
+            }
+        }
+
+        function handleFeedScrollEvent() {
+            const container = document.getElementById('tiktokFeedContainer');
+            const h = container.clientHeight || 1;
+            const newIdx = Math.round(container.scrollTop / h);
+
+            if (newIdx !== state.currentSlideIdx) {
+                recordActiveSlideDwell();
+                state.currentSlideIdx = newIdx;
+                triggerHaptic('light');
+
+                if (newIdx < state.renderedFeedList.length) {
+                    const item = state.renderedFeedList[newIdx];
+                    state.currentCardId = item.id;
+                    state.seenCardIds.add(item.id);
+                    state.viewsByCardId[item.id] = (state.viewsByCardId[item.id] || 0) + 1;
+                    if (!state.watchOrderIds.includes(item.id)) {
+                        state.watchOrderIds.push(item.id);
+                    }
+                    state.lastSlideEnterMs = performance.now();
+                } else {
+                    state.currentCardId = null;
+                }
+            }
+        }
+
+        function recordActiveSlideDwell() {
+            if (!state.currentCardId) return;
+            const now = performance.now();
+            const delta = Math.max(0, now - state.lastSlideEnterMs);
+            state.dwellByCardId[state.currentCardId] = (state.dwellByCardId[state.currentCardId] || 0) + delta;
+            state.lastSlideEnterMs = now;
+        }
+
+        function tickFeedTelemetry() {
+            if (!state.isFeedRunning) return;
+            recordActiveSlideDwell();
+
+            const elapsedSec = (performance.now() - state.feedStartMs) / 1000;
+            state.actualDurationSec = elapsedSec;
+
+            const now = new Date();
+            document.getElementById('feedRealTime').textContent = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            const m = Math.floor(elapsedSec / 60).toString().padStart(2, '0');
+            const s = Math.floor(elapsedSec % 60).toString().padStart(2, '0');
+            document.getElementById('feedSessionTimer').textContent = `${m}:${s}`;
+
+            if (state.selectedGroup !== 4 && state.durationLimitSec > 0 && elapsedSec >= state.durationLimitSec) {
+                finishFeedAndStartSurvey();
+            }
+        }
+
+        function scrollFeedStep(delta) {
+            const container = document.getElementById('tiktokFeedContainer');
+            const target = Math.max(0, state.currentSlideIdx + delta);
+            container.scrollTo({ top: target * container.clientHeight, behavior: 'smooth' });
+        }
+
+        function handleFeedDoubleTap(event, cardId) {
+            triggerHaptic('medium');
+            state.likedCardIds.add(cardId);
+            const slide = event.currentTarget;
+            const rect = slide.getBoundingClientRect();
+
+            const heart = document.createElement('div');
+            heart.className = 'floating-heart text-rose-500 text-5xl';
+            heart.style.left = `${event.clientX - rect.left}px`;
+            heart.style.top = `${event.clientY - rect.top}px`;
+            heart.innerHTML = '<i class="fa-solid fa-heart"></i>';
+            slide.appendChild(heart);
+            setTimeout(() => heart.remove(), 850);
+
+            document.querySelectorAll(`.like-btn-${cardId}`).forEach(el => el.classList.add('text-rose-500'));
+        }
+
+        function toggleLikeCard(cardId, event) {
+            event.stopPropagation();
+            triggerHaptic('light');
+            if (state.likedCardIds.has(cardId)) {
+                state.likedCardIds.delete(cardId);
+            } else {
+                state.likedCardIds.add(cardId);
+            }
+            document.querySelectorAll(`.like-btn-${cardId}`).forEach(el => el.classList.toggle('text-rose-500'));
+        }
+
+        function buyProductInFeed(cardId, title, event) {
+            event.stopPropagation();
+            triggerHaptic('medium');
+            state.boughtCardIds.add(cardId);
+            document.querySelectorAll(`.buy-btn-${cardId}`).forEach(btn => {
+                btn.textContent = 'Выбрано ✓';
+            });
+            showTmaToast(`Покупка «${title.slice(0, 18)}...» отмечена`);
+        }
+
+        function openFeedComments(cardId, event) {
+            event.stopPropagation();
+            state.activeCommentsCardId = cardId;
+            const item = state.feedPool.find(i => i.id === cardId);
+            if (!item) return;
+
+            document.getElementById('feedCommentsTitle').textContent = `Комментарии (${item.comments.length})`;
+            renderFeedCommentsList(item);
+            document.getElementById('feedCommentsDrawer').classList.remove('hidden');
+        }
+
+        function renderFeedCommentsList(item) {
+            document.getElementById('feedCommentsList').innerHTML = item.comments.map(c => `
+                <div class="bg-zinc-900 rounded-xl p-2.5">
+                    <span class="font-semibold text-zinc-300 text-[10px]">@${c.user}</span>
+                    <p class="text-zinc-200 mt-0.5">${c.text}</p>
+                </div>
+            `).join('');
+        }
+
+        function closeFeedComments() {
+            document.getElementById('feedCommentsDrawer').classList.add('hidden');
+        }
+
+        function sendFeedComment() {
+            const inp = document.getElementById('feedCommentInput');
+            const text = inp.value.trim();
+            if (!text || !state.activeCommentsCardId) return;
+            const item = state.feedPool.find(i => i.id === state.activeCommentsCardId);
+            if (item) {
+                item.comments.push({ user: state.participantName, text });
+                state.commentedCardIds.add(state.activeCommentsCardId);
+                inp.value = '';
+                renderFeedCommentsList(item);
+            }
+        }
+
+        function stopAllFeedVideosAndTimers() {
+            state.isFeedRunning = false;
+            if (state.feedTimerInterval) clearInterval(state.feedTimerInterval);
+            if (state.feedObserver) state.feedObserver.disconnect();
+            document.querySelectorAll('#tiktokFeedContainer video').forEach(v => v.pause());
+        }
+
+        // =========================================================================
+        // 8. POST-FEED SURVEY & AUTOMATIC SUMMARY ("КОНСПЕКТ")
+        // =========================================================================
+        function finishFeedAndStartSurvey() {
+            recordActiveSlideDwell();
+            stopAllFeedVideosAndTimers();
+
+            const rawSec = (performance.now() - state.feedStartMs) / 1000;
+            state.actualDurationSec = Number(Math.max(1.5, rawSec).toFixed(1));
+            state.freeRecallMatchedIds = new Set();
+            state.recognitionSelectedIds = new Set();
+            document.getElementById('freeRecallTextarea').value = '';
+            document.getElementById('freeRecallMatchedTags').innerHTML = '';
+            document.getElementById('freeRecallHitBadge').textContent = '0';
+
+            const gInfo = GROUP_INFO[state.selectedGroup];
+            document.getElementById('surveyParticipantHeader').textContent = `${state.participantName} • ${gInfo.name}`;
+
+            let viewedItems = state.watchOrderIds
+                .map(cid => state.feedPool.find(i => i.id === cid))
+                .filter(Boolean);
+
+            if (viewedItems.length === 0) {
+                viewedItems = state.feedPool.slice(0, 4);
+            }
+            state.recognitionTargets = viewedItems;
+
+            const checklistPool = [
+                ...state.recognitionTargets.map(i => ({ ...i, isTarget: true })),
+                ...DISTRACTOR_ITEMS.slice(0, 4).map(d => ({ ...d, isTarget: false }))
+            ];
+            checklistPool.sort((a, b) => a.title.localeCompare(b.title));
+            state.recognitionPool = checklistPool;
+
+            renderRecognitionChecklistHTML(checklistPool);
+            setSurveyStep(1);
+            switchTab('survey');
+        }
+
+        function setSurveyStep(step) {
+            document.getElementById('surveyStep1').classList.add('hidden');
+            document.getElementById('surveyStep2').classList.add('hidden');
+            document.getElementById('surveyStep3').classList.add('hidden');
+            document.getElementById(`surveyStep${step}`).classList.remove('hidden');
+            document.getElementById('surveyStepBadge').textContent = `${step} / 3`;
+        }
+
+        function handleFreeRecallInput() {
+            const text = document.getElementById('freeRecallTextarea').value.toLowerCase();
+            const hits = [];
+            state.feedPool.forEach(item => {
+                const kws = item.keywords || [];
+                const titleWords = item.title.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+                const allCheck = [...kws, ...titleWords];
+                if (allCheck.some(k => k && text.includes(k))) {
+                    hits.push(item);
+                }
+            });
+
+            state.freeRecallMatchedIds = new Set(hits.map(h => h.id));
+            document.getElementById('freeRecallHitBadge').textContent = `${hits.length}`;
+            document.getElementById('freeRecallMatchedTags').innerHTML = hits.map(h => `
+                <span class="px-2 py-0.5 rounded bg-zinc-800 text-zinc-200 text-[10px]">
+                    ✓ ${h.title}
+                </span>
+            `).join('');
+        }
+
+        function renderRecognitionChecklistHTML(items) {
+            document.getElementById('recognitionChecklist').innerHTML = items.map(item => `
+                <div onclick="toggleRecognitionSelect('${item.id}')" id="recRow_${item.id}" class="cursor-pointer p-2.5 rounded-lg bg-zinc-950 border border-zinc-800/80 flex items-center justify-between gap-2.5 transition">
+                    <div class="min-w-0 flex-1">
+                        <div class="text-[10px] font-mono text-zinc-500">${item.typeLabel}</div>
+                        <div class="font-medium text-xs text-zinc-200 mt-0.5 leading-snug">${item.title}</div>
+                    </div>
+                    <div id="recBox_${item.id}" class="w-5 h-5 rounded border border-zinc-700 flex items-center justify-center text-transparent shrink-0">
+                        <i class="fa-solid fa-check text-[10px]"></i>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function toggleRecognitionSelect(id) {
+            triggerHaptic('selection');
+            const row = document.getElementById(`recRow_${id}`);
+            const box = document.getElementById(`recBox_${id}`);
+            if (state.recognitionSelectedIds.has(id)) {
+                state.recognitionSelectedIds.delete(id);
+                row.className = 'cursor-pointer p-2.5 rounded-lg bg-zinc-950 border border-zinc-800/80 flex items-center justify-between gap-2.5 transition';
+                box.className = 'w-5 h-5 rounded border border-zinc-700 flex items-center justify-center text-transparent shrink-0';
+            } else {
+                state.recognitionSelectedIds.add(id);
+                row.className = 'cursor-pointer p-2.5 rounded-lg bg-zinc-900 border border-zinc-400 flex items-center justify-between gap-2.5 transition';
+                box.className = 'w-5 h-5 rounded bg-zinc-100 flex items-center justify-center text-zinc-950 shrink-0';
+            }
+        }
+
+        function submitSurveyAndComputeReport() {
+            triggerHaptic('heavy');
+
+            const mins = parseInt(document.getElementById('estMinutesInput').value, 10) || 0;
+            const secs = parseInt(document.getElementById('estSecondsInput').value, 10) || 0;
+            const perceivedSec = Math.max(1, mins * 60 + secs);
+            const actualSec = Number((state.actualDurationSec || 30).toFixed(1));
+            const timeErrorSec = Number((perceivedSec - actualSec).toFixed(1));
+            const timeErrorPct = Number((((perceivedSec - actualSec) / actualSec) * 100).toFixed(1));
+            const countingAnswer = document.getElementById('surveyCountingSelect').value;
+            const freeRecallText = document.getElementById('freeRecallTextarea').value.trim();
+
+            const watchedLog = state.watchOrderIds.map(cid => {
+                const item = state.feedPool.find(i => i.id === cid);
+                if (!item) return null;
+                const dwellSec = Number(((state.dwellByCardId[cid] || 400) / 1000).toFixed(1));
+                return {
+                    id: cid,
+                    title: item.title,
+                    type: item.type,
+                    typeLabel: item.typeLabel,
+                    dwellSec,
+                    views: state.viewsByCardId[cid] || 1,
+                    liked: state.likedCardIds.has(cid),
+                    bought: state.boughtCardIds.has(cid),
+                    commented: state.commentedCardIds.has(cid),
+                    remembered: state.recognitionSelectedIds.has(cid) || state.freeRecallMatchedIds.has(cid)
+                };
+            }).filter(Boolean);
+
+            const sortedByDwell = [...watchedLog].sort((a, b) => b.dwellSec - a.dwellSec);
+            const topWatched = sortedByDwell.slice(0, 3);
+            const skippedItems = watchedLog.filter(w => w.dwellSec < 1.5);
+
+            const targets = state.recognitionTargets;
+            const hitItems = [];
+            const missedItems = [];
+            let shopTargets = 0, shopHits = 0;
+
+            targets.forEach(t => {
+                const picked = state.recognitionSelectedIds.has(t.id);
+                if (picked) hitItems.push(t.title);
+                else missedItems.push(t.title);
+
+                if (t.type === 'product') {
+                    shopTargets++;
+                    if (picked) shopHits++;
+                }
+            });
+
+            const falseAlarmTitles = DISTRACTOR_ITEMS
+                .filter(d => state.recognitionSelectedIds.has(d.id))
+                .map(d => d.title);
+
+            const hitRatePct = Math.round((hitItems.length / Math.max(1, targets.length)) * 100);
+            const shopRecallPct = shopTargets ? Math.round((shopHits / shopTargets) * 100) : hitRatePct;
+
+            const freeRecallMatchedTitles = Array.from(state.freeRecallMatchedIds)
+                .map(id => state.feedPool.find(i => i.id === id)?.title)
+                .filter(Boolean);
+
+            const gInfo = GROUP_INFO[state.selectedGroup];
+            const errDir = timeErrorSec > 0 ? `переоценка на +${timeErrorSec} сек (+${timeErrorPct}%)` : timeErrorSec < 0 ? `недооценка на ${timeErrorSec} сек (${timeErrorPct}%)` : `точная оценка (0%)`;
+
+            const topStr = topWatched.length
+                ? topWatched.map(w => {
+                    const acts = [w.liked ? '❤️ лайк' : '', w.bought ? '🛒 клик купить' : '', w.commented ? '💬 коммент' : ''].filter(Boolean).join(', ');
+                    return `${w.typeLabel.toLowerCase()} «${w.title}» (${w.dwellSec} с${acts ? ', ' + acts : ''})`;
+                }).join(', ')
+                : 'нет данных';
+
+            const skippedStr = skippedItems.length
+                ? `Быстро пролистнул(а) (<1.5с): ${skippedItems.map(s => `«${s.title}» (${s.dwellSec}с)`).join(', ')}.`
+                : `Быстро пролистнутых карточек (<1.5с) нет.`;
+
+            const summaryText =
+`📋 КОНСПЕКТ: ${state.participantName} — ${gInfo.name} (${gInfo.shortTitle})
+⏱ Время в ленте: провёл(а) ${actualSec} сек, оценил(а) как ${perceivedSec} сек (${errDir}). Ответ про счёт: «${countingAnswer}».
+🎬 Просмотр (${watchedLog.length} карточек): дольше всего смотрел(а) ${topStr}. ${skippedStr}
+🧠 Опрос памяти: своими словами написал(а): «${freeRecallText || 'не указано'}» (распознано сюжетов: ${freeRecallMatchedTitles.length}). В тесте узнал(а) ${hitItems.length} из ${targets.length} просмотренных карточек (${hitRatePct}%), ошибок-ловушек: ${falseAlarmTitles.length}.`;
+
+            const nowStr = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            const record = {
+                id: 'sess_' + Date.now(),
+                timestamp: `Сегодня, ${nowStr}`,
+                participant: state.participantName,
+                group: state.selectedGroup,
+                actualSec,
+                perceivedSec,
+                timeErrorSec,
+                timeErrorPct,
+                countingAnswer,
+                freeRecallText,
+                freeRecallMatchedTitles,
+                freeRecallCount: freeRecallMatchedTitles.length,
+                viewedItemsCount: watchedLog.length,
+                hitCount: hitItems.length,
+                missedTitles: missedItems,
+                falseAlarmTitles,
+                hitRatePct,
+                shopRecallPct,
+                watchedLog: sortedByDwell,
+                summaryText
+            };
+
+            const sessions = getSavedSessionsList();
+            sessions.unshift(record);
+            try {
+                localStorage.setItem('neurofeed_bothost_sessions_v1', JSON.stringify(sessions));
+            } catch (e) {}
+
+            // Automatically transmit summary to BotHost Python/Node bot if opened via Keyboard WebApp button
+            try {
+                if (tg && typeof tg.sendData === 'function') {
+                    tg.sendData(JSON.stringify({
+                        participant: record.participant,
+                        group: record.group,
+                        actualSec: record.actualSec,
+                        perceivedSec: record.perceivedSec,
+                        hitRatePct: record.hitRatePct,
+                        summaryText: record.summaryText
+                    }));
+                }
+            } catch (e) {}
+
+            nextParticipantNumber();
+            switchTab('analytics');
+            showTmaToast('Конспект участника сохранён');
+        }
+
+        function getSavedSessionsList() {
+            try {
+                const raw = localStorage.getItem('neurofeed_bothost_sessions_v1');
+                return raw ? JSON.parse(raw) : [...DEMO_SESSIONS];
+            } catch (e) {
+                return [...DEMO_SESSIONS];
+            }
+        }
+
+        function renderAnalyticsView() {
+            const sessions = getSavedSessionsList();
+            document.getElementById('totalSessionsCount').textContent = sessions.length;
+
+            document.getElementById('analyticsGroupCards').innerHTML = [1, 2, 3, 4].map(g => {
+                const list = sessions.filter(s => s.group === g);
+                const n = list.length;
+                const avgErr = n ? (list.reduce((a, b) => a + b.timeErrorPct, 0) / n).toFixed(0) : '0';
+                const avgHit = n ? Math.round(list.reduce((a, b) => a + b.hitRatePct, 0) / n) : 0;
+
+                return `
+                    <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-lg p-2 text-center">
+                        <div class="text-[10px] font-medium text-zinc-300">${g} гр <span class="text-zinc-500 font-mono">(${n})</span></div>
+                        <div class="text-[10px] font-mono text-zinc-400 mt-0.5">⏱ ${avgErr > 0 ? '+' : ''}${avgErr}%</div>
+                        <div class="text-[10px] font-mono text-zinc-300">🧠 ${avgHit}%</div>
+                    </div>
+                `;
+            }).join('');
+
+            if (sessions.length === 0) {
+                document.getElementById('sessionsHistoryList').innerHTML = `
+                    <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-6 text-center text-xs text-zinc-500">
+                        Конспектов пока нет.
+                    </div>
+                `;
+                return;
+            }
+
+            document.getElementById('sessionsHistoryList').innerHTML = sessions.map((s, idx) => {
+                const maxDwell = Math.max(5, ...(s.watchedLog || []).map(w => w.dwellSec));
+                const gInfo = GROUP_INFO[s.group] || GROUP_INFO[1];
+                const isLatest = idx === 0;
+                const tgShareHref = `https://t.me/share/url?url=${encodeURIComponent(' ')}&text=${encodeURIComponent(s.summaryText)}`;
+
+                return `
+                    <div class="bg-zinc-900/40 border ${isLatest ? 'border-zinc-600' : 'border-zinc-800/80'} rounded-xl p-3.5 space-y-3">
+                        <div class="flex items-start justify-between gap-2">
+                            <div>
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span class="font-semibold text-xs text-zinc-100">${s.participant}</span>
+                                    <span class="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[10px]">${gInfo.name}</span>
+                                    <span class="text-[10px] text-zinc-500 font-mono">${s.timestamp || ''}</span>
+                                </div>
+                                <div class="text-[10px] text-zinc-500 mt-0.5">${gInfo.shortTitle}</div>
+                            </div>
+                            <div class="flex items-center gap-1 shrink-0">
+                                <a href="${tgShareHref}" target="_blank" class="px-2 py-1 rounded bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-[10px]">
+                                    В ТГ
+                                </a>
+                                <button onclick="copySingleSummary('${s.id}')" class="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-[10px]">
+                                    Копия
+                                </button>
+                                <button onclick="deleteSingleSession('${s.id}')" class="w-6 h-6 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 text-[10px] flex items-center justify-center">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="bg-zinc-950 border border-zinc-800/80 rounded-lg p-3 text-[11px] text-zinc-300 leading-relaxed whitespace-pre-line select-text">${s.summaryText}</div>
+
+                        <div class="grid grid-cols-3 gap-2 text-center bg-zinc-950/60 p-2 rounded-lg border border-zinc-800/60">
+                            <div>
+                                <div class="text-[9px] text-zinc-500">Факт / Оценка</div>
+                                <div class="text-xs font-mono font-semibold text-zinc-200 mt-0.5">${s.actualSec}с / ${s.perceivedSec}с</div>
+                                <div class="text-[10px] font-mono text-zinc-400">${s.timeErrorPct > 0 ? '+' : ''}${s.timeErrorPct}%</div>
+                            </div>
+                            <div>
+                                <div class="text-[9px] text-zinc-500">Просмотрено</div>
+                                <div class="text-xs font-mono font-semibold text-zinc-200 mt-0.5">${s.viewedItemsCount || (s.watchedLog ? s.watchedLog.length : 0)} шт.</div>
+                                <div class="text-[10px] text-zinc-500 truncate">${s.countingAnswer || ''}</div>
+                            </div>
+                            <div>
+                                <div class="text-[9px] text-zinc-500">Узнавание</div>
+                                <div class="text-xs font-mono font-semibold text-zinc-200 mt-0.5">${s.hitRatePct}%</div>
+                                <div class="text-[10px] text-zinc-500">Текст: ${s.freeRecallCount}</div>
+                            </div>
+                        </div>
+
+                        ${(s.watchedLog && s.watchedLog.length) ? `
+                            <div class="space-y-1.5 pt-1">
+                                <div class="text-[10px] text-zinc-500 flex items-center justify-between">
+                                    <span>Удержание по карточкам</span>
+                                    <span>✓ — узнал в тесте</span>
+                                </div>
+                                <div class="space-y-1">
+                                    ${s.watchedLog.map(w => {
+                                        const pct = Math.min(100, Math.max(8, Math.round((w.dwellSec / maxDwell) * 100)));
+                                        return `
+                                            <div class="flex items-center gap-2 text-[11px]">
+                                                <span class="w-40 truncate text-zinc-300" title="${w.title}">
+                                                    ${w.liked ? '♥ ' : ''}${w.bought ? '🛒 ' : ''}${w.title}
+                                                </span>
+                                                <div class="flex-1 h-1.5 bg-zinc-950 rounded-full overflow-hidden">
+                                                    <div class="h-full ${w.remembered ? 'bg-zinc-200' : 'bg-zinc-700'}" style="width:${pct}%"></div>
+                                                </div>
+                                                <span class="font-mono w-12 text-right text-[10px] ${w.remembered ? 'text-zinc-200' : 'text-zinc-500'}">
+                                                    ${w.dwellSec}с ${w.remembered ? '✓' : ''}
+                                                </span>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function copySingleSummary(sessionId) {
+            const sessions = getSavedSessionsList();
+            const found = sessions.find(s => s.id === sessionId);
+            if (!found) return;
+            copyTextToClipboard(found.summaryText);
+            showTmaToast('Конспект скопирован');
+        }
+
+        function copyAllSummariesToClipboard() {
+            const sessions = getSavedSessionsList();
+            if (!sessions.length) return;
+            const fullText = sessions.map(s => s.summaryText).join('\n\n────────────────────\n\n');
+            copyTextToClipboard(fullText);
+            showTmaToast(`Скопированы все конспекты (${sessions.length} шт.)`);
+        }
+
+        function copyTextToClipboard(text) {
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            } catch (e) {}
+        }
+
+        function deleteSingleSession(sessionId) {
+            const sessions = getSavedSessionsList().filter(s => s.id !== sessionId);
+            localStorage.setItem('neurofeed_bothost_sessions_v1', JSON.stringify(sessions));
+            renderAnalyticsView();
+            updateAllCountsUI();
+        }
+
+        function clearAllSessions() {
+            localStorage.setItem('neurofeed_bothost_sessions_v1', JSON.stringify([]));
+            renderAnalyticsView();
+            updateAllCountsUI();
+            showTmaToast('История конспектов очищена');
+        }
+
+        function exportSessionsCsv() {
+            const sessions = getSavedSessionsList();
+            const headers = ['Participant', 'Group', 'ActualSec', 'PerceivedSec', 'TimeErrorPct', 'ViewedCount', 'FreeRecallCount', 'HitRatePct', 'FreeRecallText'];
+            const rows = sessions.map(s => [
+                `"${(s.participant || '').replace(/"/g, '""')}"`,
+                s.group,
+                s.actualSec,
+                s.perceivedSec,
+                s.timeErrorPct,
+                s.viewedItemsCount || 0,
+                s.freeRecallCount || 0,
+                s.hitRatePct,
+                `"${(s.freeRecallText || '').replace(/"/g, '""')}"`
+            ]);
+            const csv = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+            const a = document.createElement('a');
+            a.href = encodeURI(csv);
+            a.download = 'neurofeed_bothost_summaries.csv';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        }
+
+        function showTmaToast(text) {
+            const toast = document.getElementById('tmaToast');
+            document.getElementById('tmaToastText').textContent = text;
+            toast.classList.remove('hidden');
+            setTimeout(() => toast.classList.add('hidden'), 2400);
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (state.activeTab !== 'feed') return;
+            if (e.key === 'ArrowDown') { e.preventDefault(); scrollFeedStep(1); }
+            if (e.key === 'ArrowUp') { e.preventDefault(); scrollFeedStep(-1); }
+        });
+
+        window.onload = function () {
+            initTelegramUserIdentity();
+            loadFeedPoolFromStorage();
+        };
+    </script>
+</body>
+</html>

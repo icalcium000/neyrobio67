@@ -1,564 +1,586 @@
-import os
-import sys
+import asyncio
+import csv
+import io
 import json
 import logging
-import asyncio
+import os
+import sqlite3
 from datetime import datetime
-from aiohttp import web, WSMsgType
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart, Command
-from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
+from pathlib import Path
 
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-from sqlalchemy import Column, Integer, String, BigInteger, ForeignKey, Text, DateTime, Boolean, select, or_
+from aiohttp import web
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandStart
+from aiogram.types import (
+    BufferedInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    WebAppInfo,
+)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBAPP_URL = os.getenv("WEBAPP_URL")
-PORT = 3000
+# Поддержка всех версий aiogram 3.x на BotHost
+try:
+    from aiogram.client.default import DefaultBotProperties
+    HAS_DEFAULT_PROPS = True
+except ImportError:
+    HAS_DEFAULT_PROPS = False
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-if not BOT_TOKEN or not WEBAPP_URL:
-    logging.error("ОШИБКА: Не заданы BOT_TOKEN или WEBAPP_URL в переменных окружения!")
-    sys.exit(1)
+# ==============================================================================
+# 1. НАСТРОЙКИ БОТА (МОЖНО ЗАДАТЬ ЗДЕСЬ ИЛИ В ПЕРЕМЕННЫХ ОКРУЖЕНИЯ BOTHOST)
+# ==============================================================================
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬТЕ_СЮДА_ТОКЕН_ОТ_BOTFATHER")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ВАШ_ДОМЕН.bothost.ru")
 
-if not WEBAPP_URL.endswith('/'):
-    WEBAPP_URL += '/'
+# Укажите ваш числовой Telegram ID (узнать можно командой /myid в самом боте).
+# Если оставить список пустым [], первым админом станет тот, кто первый напишет /admin
+RAW_ADMIN_IDS = os.getenv("ADMIN_IDS", "")
+ADMIN_IDS: set[int] = {
+    int(x.strip()) for x in RAW_ADMIN_IDS.split(",") if x.strip().isdigit()
+}
 
-# Создаем папку для загрузки медиа, если её нет
-os.makedirs('./uploads', exist_ok=True)
+# Путь к базе данных SQLite (создастся автоматически при запуске)
+DB_PATH = Path(__file__).parent / "experiment.db"
+INDEX_HTML_PATH = Path(__file__).parent / "index.html"
+HTTP_PORT = int(os.getenv("PORT", "8080"))
 
-Base = declarative_base()
-engine = create_async_engine("sqlite+aiosqlite:///app.db", echo=False)
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("NeuroFeedBot")
 
-class User(Base):
-    __tablename__ = 'users'
-    id = Column(Integer, primary_key=True)
-    tg_id = Column(BigInteger, unique=True, nullable=False)
-    is_admin = Column(Boolean, default=False)
-    characters = relationship("Character", back_populates="owner", lazy="joined")
 
-class Character(Base):
-    __tablename__ = 'characters'
-    id = Column(Integer, primary_key=True)
-    owner_id = Column(Integer, ForeignKey('users.id'))
-    name = Column(String, nullable=False)
-    owner = relationship("User", back_populates="characters")
+# ==============================================================================
+# 2. РАБОТА С БАЗОЙ ДАННЫХ (SQLITE)
+# ==============================================================================
+def init_db() -> None:
+    """Создаёт таблицы для хранения конспектов участников и прав администратора."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_user_id INTEGER,
+                tg_username TEXT,
+                participant_name TEXT NOT NULL,
+                group_num INTEGER NOT NULL,
+                actual_sec REAL DEFAULT 0,
+                perceived_sec REAL DEFAULT 0,
+                time_error_sec REAL DEFAULT 0,
+                time_error_pct REAL DEFAULT 0,
+                counting_answer TEXT DEFAULT '',
+                free_recall_text TEXT DEFAULT '',
+                hit_rate_pct INTEGER DEFAULT 0,
+                viewed_count INTEGER DEFAULT 0,
+                summary_text TEXT NOT NULL,
+                watched_json TEXT DEFAULT '[]',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admins (
+                user_id INTEGER PRIMARY KEY
+            )
+            """
+        )
+        for uid in ADMIN_IDS:
+            conn.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (uid,))
+        conn.commit()
 
-class Post(Base):
-    __tablename__ = 'posts'
-    id = Column(Integer, primary_key=True)
-    author_id = Column(Integer, ForeignKey('characters.id'))
-    text = Column(Text, nullable=True)
-    media_url = Column(String, nullable=True)
-    media_type = Column(String, nullable=True) # 'image' or 'video'
-    created_at = Column(DateTime, default=datetime.utcnow)
-    author = relationship("Character", lazy="joined")
 
-class Chat(Base):
-    __tablename__ = 'chats'
-    id = Column(Integer, primary_key=True)
-    title = Column(String, nullable=False)
-    messages = relationship("Message", back_populates="chat")
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь исследователем (админом)."""
+    if user_id in ADMIN_IDS:
+        return True
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM admins WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row is not None
 
-class Message(Base):
-    __tablename__ = 'messages'
-    id = Column(Integer, primary_key=True)
-    chat_id = Column(Integer, ForeignKey('chats.id'))
-    author_id = Column(Integer, ForeignKey('characters.id'))
-    text = Column(Text, nullable=True)
-    media_url = Column(String, nullable=True)
-    media_type = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    author = relationship("Character", lazy="joined")
-    chat = relationship("Chat", back_populates="messages")
 
-bot = Bot(token=BOT_TOKEN)
+def register_admin(user_id: int) -> None:
+    """Добавляет Telegram ID в список исследователей."""
+    ADMIN_IDS.add(user_id)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+
+
+def get_all_admin_ids() -> list[int]:
+    """Возвращает все Telegram ID администраторов для рассылки конспектов."""
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT user_id FROM admins").fetchall()
+        ids = {r[0] for r in rows} | ADMIN_IDS
+        return list(ids)
+
+
+def save_session_record(
+    tg_user_id: int | None,
+    tg_username: str,
+    payload: dict,
+) -> int:
+    """Сохраняет прохождение эксперимента и готовый конспект в SQLite."""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    participant_name = str(payload.get("participant") or tg_username or "Участник")
+    group_num = int(payload.get("group") or 1)
+    actual_sec = float(payload.get("actualSec") or 0)
+    perceived_sec = float(payload.get("perceivedSec") or 0)
+    time_error_sec = float(
+        payload.get("timeErrorSec") or round(perceived_sec - actual_sec, 1)
+    )
+    time_error_pct = float(payload.get("timeErrorPct") or 0)
+    counting_answer = str(payload.get("countingAnswer") or "")
+    free_recall_text = str(payload.get("freeRecallText") or "")
+    hit_rate_pct = int(payload.get("hitRatePct") or 0)
+    viewed_count = int(payload.get("viewedItemsCount") or 0)
+    summary_text = str(payload.get("summaryText") or "").strip()
+    watched_json = json.dumps(payload.get("watchedLog") or [], ensure_ascii=False)
+
+    if not summary_text:
+        summary_text = (
+            f"📋 КОНСПЕКТ: {participant_name} — {group_num} группа\n"
+            f"⏱ Факт: {actual_sec}с | Оценка: {perceived_sec}с ({time_error_pct}%)\n"
+            f"🧠 Узнавание: {hit_rate_pct}% | Текст: {free_recall_text or 'нет'}"
+        )
+
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO sessions (
+                tg_user_id, tg_username, participant_name, group_num,
+                actual_sec, perceived_sec, time_error_sec, time_error_pct,
+                counting_answer, free_recall_text, hit_rate_pct, viewed_count,
+                summary_text, watched_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tg_user_id,
+                tg_username,
+                participant_name,
+                group_num,
+                actual_sec,
+                perceived_sec,
+                time_error_sec,
+                time_error_pct,
+                counting_answer,
+                free_recall_text,
+                hit_rate_pct,
+                viewed_count,
+                summary_text,
+                watched_json,
+                now_str,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+
+
+def fetch_recent_sessions(limit: int = 5) -> list[sqlite3.Row]:
+    """Возвращает последние N конспектов."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute(
+            "SELECT * FROM sessions ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+
+
+def fetch_all_sessions() -> list[sqlite3.Row]:
+    """Возвращает все записи для аналитики и выгрузки в CSV."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute("SELECT * FROM sessions ORDER BY id ASC").fetchall()
+
+
+def clear_sessions_db() -> None:
+    """Очищает таблицу результатов."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM sessions")
+        conn.commit()
+
+
+# ==============================================================================
+# 3. ИНИЦИАЛИЗАЦИЯ AIOGRAM 3
+# ==============================================================================
+if HAS_DEFAULT_PROPS:
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+else:
+    bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+
 dp = Dispatcher()
 
+
+def build_main_keyboard(user_is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """Главная клавиатура: кнопка запуска Mini App + панель исследователя для админа."""
+    rows = [
+        [
+            KeyboardButton(
+                text="📱 Открыть ленту",
+                web_app=WebAppInfo(url=WEBAPP_URL),
+            )
+        ]
+    ]
+    if user_is_admin:
+        rows.append(
+            [
+                KeyboardButton(text="📋 Конспекты"),
+                KeyboardButton(text="📊 По группам"),
+                KeyboardButton(text="📥 CSV"),
+            ]
+        )
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def build_admin_inline_kb() -> InlineKeyboardMarkup:
+    """Инлайн-кнопки управления результатами для исследователя."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📋 Последние 5 конспектов", callback_data="adm_recent"
+                ),
+                InlineKeyboardButton(
+                    text="📊 Сводка по 4 группам", callback_data="adm_groups"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📥 Скачать таблицу CSV", callback_data="adm_csv"
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Очистить базу", callback_data="adm_clear_confirm"
+                ),
+            ],
+        ]
+    )
+
+
+# ==============================================================================
+# 4. ОБРАБОТЧИКИ КОМАНД И MINI APP (WEB_APP_DATA)
+# ==============================================================================
 @dp.message(CommandStart())
-async def start_cmd(message: types.Message):
-    async with async_session() as session:
-        result = await session.execute(select(User).where(User.tg_id == message.from_user.id))
-        user = result.scalars().first()
-        if not user:
-            # Создаем пользователя
-            user = User(tg_id=message.from_user.id, is_admin=True)
-            session.add(user)
-            await session.commit()
-            
-            # Выдаем персонажа по умолчанию при первой регистрации
-            char = Character(owner_id=user.id, name=message.from_user.first_name)
-            session.add(char)
-            await session.commit()
+async def cmd_start(message: types.Message) -> None:
+    user = message.from_user
+    admin_flag = is_admin(user.id) if user else False
 
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Открыть Приложение", web_app=WebAppInfo(url=WEBAPP_URL))]
-    ])
-    await message.answer(f"Ваш ID: {message.from_user.id}\nОткройте приложение:", reply_markup=markup)
+    # Если админы ещё не заданы ни в коде, ни в БД — автоматически назначаем первого вошедшего
+    if user and not get_all_admin_ids():
+        register_admin(user.id)
+        admin_flag = True
 
-@dp.message(Command("add_char"))
-async def add_char_cmd(message: types.Message):
-    # Команда: /add_char <TG_ID> <Имя персонажа>
-    try:
-        parts = message.text.split(" ", 2)
-        tg_id = int(parts[1])
-        char_name = parts[2]
-        
-        async with async_session() as session:
-            res = await session.execute(select(User).where(User.tg_id == tg_id))
-            target_user = res.scalars().first()
-            if not target_user:
-                await message.answer("Пользователь не найден в БД. Пусть нажмет /start")
-                return
-            
-            new_char = Character(owner_id=target_user.id, name=char_name)
-            session.add(new_char)
-            await session.commit()
-            await message.answer(f"Персонаж '{char_name}' успешно выдан пользователю {tg_id}!")
-    except Exception:
-        await message.answer("Ошибка формата. Используйте: /add_char <TG_ID> <Имя>")
+    text = (
+        "Нажмите <b>«📱 Открыть ленту»</b> ниже, чтобы запустить эксперимент.\n\n"
+        "После просмотра ленты и короткого опроса ответы сохранятся автоматически."
+    )
+    if admin_flag:
+        text += "\n\n<i>Вы вошли как исследователь (доступны конспекты и выгрузка CSV).</i>"
 
-async def handle_upload(request):
-    reader = await request.multipart()
-    field = await reader.next()
-    
-    if not field:
-        return web.json_response({'error': 'No file'}, status=400)
-    
-    filename = field.filename
-    ext = os.path.splitext(filename)[1].lower()
-    
-    # Генерируем безопасное уникальное имя файла
-    safe_name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{os.urandom(4).hex()}{ext}"
-    filepath = os.path.join('./uploads', safe_name)
-    
-    with open(filepath, 'wb') as f:
-        while True:
-            chunk = await field.read_chunk()
-            if not chunk:
-                break
-            f.write(chunk)
-            
-    media_type = 'video' if ext in ['.mp4', '.mov', '.webm'] else 'image'
-    return web.json_response({'url': f'/uploads/{safe_name}', 'type': media_type})
+    await message.answer(text, reply_markup=build_main_keyboard(admin_flag))
 
-active_websockets = []
 
-async def broadcast_ws(message_data):
-    for ws in active_websockets:
-        try:
-            await ws.send_json(message_data)
-        except Exception:
-            pass
+@dp.message(Command("myid"))
+async def cmd_myid(message: types.Message) -> None:
+    if not message.from_user:
+        return
+    await message.answer(
+        f"Ваш Telegram ID: <code>{message.from_user.id}</code>\n"
+        "Его можно указать в переменной <code>ADMIN_IDS</code> на BotHost."
+    )
 
-async def handle_ws(request):
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-    active_websockets.append(ws)
-    
-    try:
-        async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
-                data = json.loads(msg.data)
-                action = data.get('action')
-                
-                async with async_session() as session:
-                    if action == 'new_post':
-                        post = Post(
-                            author_id=data['author_id'],
-                            text=data.get('text', ''),
-                            media_url=data.get('media_url'),
-                            media_type=data.get('media_type')
-                        )
-                        session.add(post)
-                        await session.commit()
-                        await session.refresh(post)
-                        
-                        await broadcast_ws({
-                            'type': 'new_post',
-                            'post': {
-                                'id': post.id,
-                                'text': post.text,
-                                'media_url': post.media_url,
-                                'media_type': post.media_type,
-                                'author_name': post.author.name
-                            }
-                        })
-                        
-                    elif action == 'new_message':
-                        msg_obj = Message(
-                            chat_id=data['chat_id'],
-                            author_id=data['author_id'],
-                            text=data.get('text', ''),
-                            media_url=data.get('media_url'),
-                            media_type=data.get('media_type')
-                        )
-                        session.add(msg_obj)
-                        await session.commit()
-                        await session.refresh(msg_obj)
-                        
-                        await broadcast_ws({
-                            'type': 'new_message',
-                            'message': {
-                                'id': msg_obj.id,
-                                'chat_id': msg_obj.chat_id,
-                                'text': msg_obj.text,
-                                'media_url': msg_obj.media_url,
-                                'media_type': msg_obj.media_type,
-                                'author_name': msg_obj.author.name
-                            }
-                        })
-    finally:
-        active_websockets.remove(ws)
-    return ws
 
-async def handle_init(request):
-    tg_id = request.rel_url.query.get('tg_id')
-    if not tg_id:
-        return web.json_response({'error': 'No tg_id'})
-        
-    async with async_session() as session:
-        res = await session.execute(select(User).where(User.tg_id == int(tg_id)))
-        user = res.scalars().first()
-        if not user:
-            return web.json_response({'error': 'User not found'})
-            
-        chars = [{'id': c.id, 'name': c.name} for c in user.characters]
-        
-        # Получаем ленту (последние 50 постов)
-        posts_res = await session.execute(select(Post).order_by(Post.created_at.desc()).limit(50))
-        posts = [{
-            'id': p.id, 'text': p.text, 'media_url': p.media_url, 
-            'media_type': p.media_type, 'author_name': p.author.name
-        } for p in posts_res.scalars().all()]
-        
-        # Получаем чаты
-        chats_res = await session.execute(select(Chat))
-        chats = []
-        for c in chats_res.scalars().all():
-            msg_res = await session.execute(select(Message).where(Message.chat_id == c.id).order_by(Message.created_at.asc()))
-            msgs = [{
-                'id': m.id, 'text': m.text, 'author_name': m.author.name,
-                'media_url': m.media_url, 'media_type': m.media_type
-            } for m in msg_res.scalars().all()]
-            chats.append({'id': c.id, 'title': c.title, 'messages': msgs})
-            
-        # Создаем общий чат при первом запуске, если его нет
-        if len(chats) == 0:
-            general = Chat(title="Общий чат")
-            session.add(general)
-            await session.commit()
-            chats.append({'id': general.id, 'title': general.title, 'messages': []})
+@dp.message(Command("admin"))
+async def cmd_admin(message: types.Message) -> None:
+    if not message.from_user:
+        return
+    uid = message.from_user.id
+    if not get_all_admin_ids():
+        register_admin(uid)
 
-        return web.json_response({
-            'characters': chars,
-            'posts': posts,
-            'chats': chats
-        })
+    if not is_admin(uid):
+        await message.answer(
+            f"Нет доступа. Ваш ID: <code>{uid}</code> (добавьте его в ADMIN_IDS)."
+        )
+        return
 
-async def create_chat(request):
-    data = await request.json()
-    async with async_session() as session:
-        chat = Chat(title=data['title'])
-        session.add(chat)
-        await session.commit()
-        return web.json_response({'id': chat.id, 'title': chat.title})
+    rows = fetch_all_sessions()
+    await message.answer(
+        f"<b>Панель исследователя</b>\n"
+        f"Всего записано участников: <b>{len(rows)}</b>\n"
+        f"URL Mini App: <code>{WEBAPP_URL}</code>",
+        reply_markup=build_admin_inline_kb(),
+    )
 
-async def handle_index(request):
-    html = """
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-        <script src="https://telegram.org/js/telegram-web-app.js"></script>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <style>
-            body { background: var(--tg-theme-bg-color, #1a1a1a); color: var(--tg-theme-text-color, #ffffff); overflow: hidden;}
-            .tab-content { display: none; height: calc(100vh - 60px); overflow-y: auto; padding-bottom: 20px;}
-            .tab-content.active { display: block; }
-            .nav-btn.active { color: var(--tg-theme-button-color, #2b6cb0); border-bottom: 2px solid var(--tg-theme-button-color, #2b6cb0); }
-            input, button, textarea { background: var(--tg-theme-secondary-bg-color, #2d3748); color: var(--tg-theme-text-color, #fff); }
-            .btn-primary { background: var(--tg-theme-button-color, #3182ce); color: var(--tg-theme-button-text-color, #fff); }
-            .post-card, .chat-msg { background: var(--tg-theme-secondary-bg-color, #2d3748); border: 1px solid var(--tg-theme-hint-color, #4a5568); }
-        </style>
-    </head>
-    <body class="flex flex-col h-screen">
-        
-        <nav class="flex justify-around border-b border-gray-700 bg-black bg-opacity-20 p-2 h-[60px] shrink-0">
-            <button onclick="switchTab('feed')" id="nav-feed" class="nav-btn active px-4 py-2 font-bold">Лента</button>
-            <button onclick="switchTab('chats')" id="nav-chats" class="nav-btn px-4 py-2 font-bold">Чаты</button>
-            <button onclick="switchTab('profile')" id="nav-profile" class="nav-btn px-4 py-2 font-bold">Персонажи</button>
-        </nav>
 
-        <div id="feed" class="tab-content active p-4">
-            <div class="mb-4 p-3 rounded post-card">
-                <textarea id="postText" class="w-full p-2 rounded mb-2" placeholder="Что нового у вашего персонажа?" rows="2"></textarea>
-                <input type="file" id="postMedia" class="text-sm mb-2 w-full" accept="image/*,video/*">
-                <button onclick="createPost()" class="btn-primary w-full p-2 rounded font-bold">Опубликовать</button>
-            </div>
-            <div id="feedContainer" class="space-y-4"></div>
-        </div>
-
-        <div id="chats" class="tab-content p-4">
-            <div id="chatList" class="space-y-2"></div>
-            <div class="mt-4 flex gap-2">
-                <input type="text" id="newChatName" placeholder="Название нового чата" class="flex-1 p-2 rounded">
-                <button onclick="createNewChat()" class="btn-primary p-2 rounded">+</button>
-            </div>
-            
-            <div id="chatWindow" class="hidden fixed inset-0 bg-[var(--tg-theme-bg-color)] z-50 flex flex-col h-screen">
-                <div class="p-3 border-b flex items-center bg-black bg-opacity-20">
-                    <button onclick="closeChat()" class="mr-4 text-2xl">←</button>
-                    <h2 id="chatTitle" class="font-bold text-lg">Чат</h2>
-                </div>
-                <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
-                <div class="p-3 border-t flex gap-2 bg-black bg-opacity-20">
-                    <input type="file" id="msgMedia" class="hidden" accept="image/*,video/*">
-                    <button onclick="document.getElementById('msgMedia').click()" class="text-2xl px-2">📎</button>
-                    <input type="text" id="msgText" class="flex-1 p-2 rounded" placeholder="Сообщение...">
-                    <button onclick="sendMessage()" class="btn-primary px-4 rounded font-bold">➔</button>
-                </div>
-            </div>
-        </div>
-
-        <div id="profile" class="tab-content p-4">
-            <h2 class="text-xl font-bold mb-4">Выбор персонажа</h2>
-            <div id="charactersList" class="space-y-2"></div>
-            <p class="text-sm text-gray-400 mt-4">Чтобы добавить персонажа, админ должен отправить в бота команду: /add_char Ваш_ID Имя</p>
-        </div>
-
-        <script>
-            const tg = window.Telegram.WebApp;
-            tg.expand();
-            
-            let state = {
-                tg_id: tg.initDataUnsafe?.user?.id || 1, // 1 для тестов
-                characters: [],
-                activeCharId: null,
-                posts: [],
-                chats: [],
-                currentChatId: null,
-                ws: null
-            };
-
-            async function initApp() {
-                const res = await fetch(`/api/init?tg_id=${state.tg_id}`);
-                const data = await res.json();
-                if(data.error) return alert("Ошибка загрузки: " + data.error);
-                
-                state.characters = data.characters;
-                if(state.characters.length > 0) state.activeCharId = state.characters[0].id;
-                state.posts = data.posts;
-                state.chats = data.chats;
-                
-                renderCharacters();
-                renderFeed();
-                renderChats();
-                connectWebSocket();
-            }
-
-            function connectWebSocket() {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                state.ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-                
-                state.ws.onmessage = (event) => {
-                    const data = JSON.parse(event.data);
-                    if (data.type === 'new_post') {
-                        state.posts.unshift(data.post);
-                        if (document.getElementById('feed').classList.contains('active')) renderFeed();
-                    } else if (data.type === 'new_message') {
-                        const chat = state.chats.find(c => c.id === data.message.chat_id);
-                        if (chat) chat.messages.push(data.message);
-                        if (state.currentChatId === data.message.chat_id) renderMessages();
-                    }
-                };
-            }
-
-            async function uploadFile(fileInputId) {
-                const file = document.getElementById(fileInputId).files[0];
-                if (!file) return null;
-                const fd = new FormData();
-                fd.append('file', file);
-                const res = await fetch('/api/upload', { method: 'POST', body: fd });
-                return await res.json();
-            }
-
-            function renderCharacters() {
-                const html = state.characters.map(c => `
-                    <div onclick="selectChar(${c.id})" class="p-3 rounded border ${c.id === state.activeCharId ? 'border-blue-500 bg-blue-900 bg-opacity-30' : 'border-gray-600'} cursor-pointer flex justify-between items-center">
-                        <span class="font-bold">${c.name}</span>
-                        ${c.id === state.activeCharId ? '<span>✅</span>' : ''}
-                    </div>
-                `).join('');
-                document.getElementById('charactersList').innerHTML = html;
-            }
-
-            function selectChar(id) {
-                state.activeCharId = id;
-                renderCharacters();
-                try { tg.HapticFeedback.selectionChanged(); } catch(e) {}
-            }
-
-            function renderFeed() {
-                const html = state.posts.map(p => `
-                    <div class="post-card p-4 rounded shadow">
-                        <div class="font-bold mb-2 text-blue-400">${p.author_name}</div>
-                        ${p.media_url ? (p.media_type === 'video' ? 
-                            `<video src="${p.media_url}" controls class="w-full rounded mb-2"></video>` : 
-                            `<img src="${p.media_url}" class="w-full rounded mb-2">`) : ''}
-                        <div>${p.text || ''}</div>
-                    </div>
-                `).join('');
-                document.getElementById('feedContainer').innerHTML = html;
-            }
-
-            function renderChats() {
-                const html = state.chats.map(c => `
-                    <div onclick="openChat(${c.id})" class="p-4 rounded border border-gray-600 cursor-pointer flex justify-between items-center">
-                        <span class="font-bold">${c.title}</span>
-                        <span class="text-gray-400 text-sm">${c.messages.length} сообщ.</span>
-                    </div>
-                `).join('');
-                document.getElementById('chatList').innerHTML = html;
-            }
-
-            async function createPost() {
-                if (!state.activeCharId) return alert("Сначала выберите персонажа во вкладке 'Персонажи'!");
-                const text = document.getElementById('postText').value;
-                const mediaRes = await uploadFile('postMedia');
-                
-                if(!text && !mediaRes) return;
-                
-                state.ws.send(JSON.stringify({
-                    action: 'new_post',
-                    author_id: state.activeCharId,
-                    text: text,
-                    media_url: mediaRes?.url,
-                    media_type: mediaRes?.type
-                }));
-                
-                document.getElementById('postText').value = '';
-                document.getElementById('postMedia').value = '';
-                try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
-            }
-
-            async function sendMessage() {
-                if (!state.activeCharId) return alert("Выберите персонажа!");
-                const text = document.getElementById('msgText').value;
-                const mediaRes = await uploadFile('msgMedia');
-                
-                if(!text && !mediaRes) return;
-                
-                state.ws.send(JSON.stringify({
-                    action: 'new_message',
-                    chat_id: state.currentChatId,
-                    author_id: state.activeCharId,
-                    text: text,
-                    media_url: mediaRes?.url,
-                    media_type: mediaRes?.type
-                }));
-                
-                document.getElementById('msgText').value = '';
-                document.getElementById('msgMedia').value = '';
-            }
-
-            async function createNewChat() {
-                const title = document.getElementById('newChatName').value;
-                if(!title) return;
-                const res = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({title})
-                });
-                const chat = await res.json();
-                chat.messages = [];
-                state.chats.push(chat);
-                renderChats();
-                document.getElementById('newChatName').value = '';
-            }
-
-            function switchTab(tabId) {
-                document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-                document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
-                document.getElementById(tabId).classList.add('active');
-                document.getElementById('nav-' + tabId).classList.add('active');
-                try { tg.HapticFeedback.selectionChanged(); } catch(e) {}
-            }
-
-            function openChat(id) {
-                state.currentChatId = id;
-                const chat = state.chats.find(c => c.id === id);
-                document.getElementById('chatTitle').innerText = chat.title;
-                document.getElementById('chatWindow').classList.remove('hidden');
-                renderMessages();
-            }
-
-            function closeChat() {
-                document.getElementById('chatWindow').classList.add('hidden');
-                state.currentChatId = null;
-            }
-
-            function renderMessages() {
-                const chat = state.chats.find(c => c.id === state.currentChatId);
-                const container = document.getElementById('chatMessages');
-                
-                container.innerHTML = chat.messages.map(m => `
-                    <div class="chat-msg p-3 rounded-lg w-4/5 ${m.author_name === state.characters.find(c=>c.id === state.activeCharId)?.name ? 'ml-auto bg-blue-900 bg-opacity-30 border-blue-500' : ''}">
-                        <div class="text-xs text-gray-400 mb-1">${m.author_name}</div>
-                        ${m.media_url ? (m.media_type === 'video' ? 
-                            `<video src="${m.media_url}" controls class="w-full rounded mb-1"></video>` : 
-                            `<img src="${m.media_url}" class="w-full rounded mb-1">`) : ''}
-                        <div>${m.text || ''}</div>
-                    </div>
-                `).join('');
-                container.scrollTop = container.scrollHeight;
-            }
-
-            initApp();
-        </script>
-    </body>
-    </html>
+@dp.message(F.web_app_data)
+async def handle_webapp_data(message: types.Message) -> None:
     """
-    return web.Response(text=html, content_type='text/html')
+    Принимает данные из Telegram.WebApp.sendData() после завершения опроса,
+    записывает их в SQLite и пересылает готовый конспект исследователю.
+    """
+    if not message.web_app_data:
+        return
 
-async def on_startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    raw_data = message.web_app_data.data
+    try:
+        payload = json.loads(raw_data)
+    except json.JSONDecodeError:
+        payload = {"summaryText": raw_data}
 
-async def main():
-    await on_startup()
-    
-    app = web.Application()
-    
-    # API endpoints
-    app.router.add_get('/ws', handle_ws)
-    app.router.add_get('/api/init', handle_init)
-    app.router.add_post('/api/upload', handle_upload)
-    app.router.add_post('/api/chat', create_chat)
-    
-    # Раздача медиафайлов
-    app.router.add_static('/uploads', './uploads')
-    
-    # HTML Фронтенд 
-    app.router.add_route('*', '/{tail:.*}', handle_index)
-    app.router.add_route('*', '/', handle_index)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    logging.info(f"✅ Сервер запущен на порту {PORT}")
-    
+    user = message.from_user
+    uid = user.id if user else None
+    username = f"@{user.username}" if (user and user.username) else (user.full_name if user else "")
+
+    record_id = save_session_record(uid, username, payload)
+    summary_text = str(payload.get("summaryText") or "").strip()
+
+    await message.answer(
+        "Спасибо! Ваши ответы записаны. Можете закрыть бота или передать устройство следующему участнику."
+    )
+
+    # Отправляем готовый конспект всем администраторам
+    admin_notification = (
+        f"<b>Новая запись #{record_id}</b> ({username or 'без username'})\n\n"
+        f"{summary_text}"
+    )
+    for admin_id in get_all_admin_ids():
+        try:
+            await bot.send_message(admin_id, admin_notification)
+        except Exception as e:
+            logger.warning("Не удалось отправить конспект админу %s: %s", admin_id, e)
+
+
+# ==============================================================================
+# 5. ПРОСМОТР КОНСПЕКТОВ, СТАТИСТИКИ ПО 4 ГРУППАМ И ЭКСПОРТ CSV
+# ==============================================================================
+async def send_recent_summaries(target_chat_id: int) -> None:
+    rows = fetch_recent_sessions(limit=5)
+    if not rows:
+        await bot.send_message(target_chat_id, "Конспектов пока нет.")
+        return
+
+    for r in reversed(rows):
+        header = f"<b>#{r['id']}</b> • {r['created_at']}\n"
+        await bot.send_message(target_chat_id, header + r["summary_text"])
+
+
+async def send_group_stats(target_chat_id: int) -> None:
+    rows = fetch_all_sessions()
+    if not rows:
+        await bot.send_message(target_chat_id, "Пока нет данных для статистики.")
+        return
+
+    group_names = {
+        1: "1 группа (часы видны)",
+        2: "2 группа (время скрыто, считать нельзя)",
+        3: "3 группа (время скрыто, считать можно)",
+        4: "4 группа (ограниченная лента, считать нельзя)",
+    }
+
+    lines = [f"<b>Сводка по группам (всего: {len(rows)} чел.)</b>\n"]
+    for g in (1, 2, 3, 4):
+        g_rows = [r for r in rows if r["group_num"] == g]
+        n = len(g_rows)
+        if n == 0:
+            lines.append(f"• <b>{group_names[g]}</b>: 0 чел.")
+            continue
+
+        avg_actual = sum(r["actual_sec"] for r in g_rows) / n
+        avg_perceived = sum(r["perceived_sec"] for r in g_rows) / n
+        avg_err_pct = sum(r["time_error_pct"] for r in g_rows) / n
+        avg_hit = sum(r["hit_rate_pct"] for r in g_rows) / n
+
+        lines.append(
+            f"• <b>{group_names[g]}</b> — <b>{n} чел.</b>\n"
+            f"  ⏱ Факт: <code>{avg_actual:.1f}с</code> | Оценка: <code>{avg_perceived:.1f}с</code> ({avg_err_pct:+.1f}%)\n"
+            f"  🧠 Узнавание карточек: <code>{avg_hit:.0f}%</code>"
+        )
+
+    await bot.send_message(target_chat_id, "\n".join(lines))
+
+
+async def send_csv_export(target_chat_id: int) -> None:
+    rows = fetch_all_sessions()
+    if not rows:
+        await bot.send_message(target_chat_id, "База пуста — выгружать пока нечего.")
+        return
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow(
+        [
+            "ID",
+            "Дата",
+            "Участник",
+            "Username",
+            "Группа",
+            "Факт_сек",
+            "Оценка_сек",
+            "Ошибка_сек",
+            "Ошибка_проц",
+            "Счет_про_себя",
+            "Просмотрено_шт",
+            "Узнавание_проц",
+            "Свободное_припоминание",
+            "Полный_конспект",
+        ]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r["id"],
+                r["created_at"],
+                r["participant_name"],
+                r["tg_username"],
+                r["group_num"],
+                r["actual_sec"],
+                r["perceived_sec"],
+                r["time_error_sec"],
+                r["time_error_pct"],
+                r["counting_answer"],
+                r["viewed_count"],
+                r["hit_rate_pct"],
+                r["free_recall_text"],
+                r["summary_text"].replace("\n", " | "),
+            ]
+        )
+
+    csv_bytes = ("\ufeff" + buf.getvalue()).encode("utf-8")
+    doc = BufferedInputFile(csv_bytes, filename="neurofeed_experiment.csv")
+    await bot.send_document(
+        target_chat_id,
+        document=doc,
+        caption=f"Выгрузка эксперимента ({len(rows)} участников)",
+    )
+
+
+@dp.message(F.text == "📋 Конспекты")
+async def btn_recent_summaries(message: types.Message) -> None:
+    if message.from_user and is_admin(message.from_user.id):
+        await send_recent_summaries(message.chat.id)
+
+
+@dp.message(F.text == "📊 По группам")
+async def btn_group_stats(message: types.Message) -> None:
+    if message.from_user and is_admin(message.from_user.id):
+        await send_group_stats(message.chat.id)
+
+
+@dp.message(F.text == "📥 CSV")
+async def btn_csv_export(message: types.Message) -> None:
+    if message.from_user and is_admin(message.from_user.id):
+        await send_csv_export(message.chat.id)
+
+
+@dp.callback_query(F.data == "adm_recent")
+async def cb_adm_recent(callback: types.CallbackQuery) -> None:
+    if callback.from_user and is_admin(callback.from_user.id) and callback.message:
+        await send_recent_summaries(callback.message.chat.id)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_groups")
+async def cb_adm_groups(callback: types.CallbackQuery) -> None:
+    if callback.from_user and is_admin(callback.from_user.id) and callback.message:
+        await send_group_stats(callback.message.chat.id)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_csv")
+async def cb_adm_csv(callback: types.CallbackQuery) -> None:
+    if callback.from_user and is_admin(callback.from_user.id) and callback.message:
+        await send_csv_export(callback.message.chat.id)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_clear_confirm")
+async def cb_adm_clear_confirm(callback: types.CallbackQuery) -> None:
+    if not (callback.from_user and is_admin(callback.from_user.id) and callback.message):
+        await callback.answer()
+        return
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, удалить все записи", callback_data="adm_clear_do"
+                ),
+                InlineKeyboardButton(text="Отмена", callback_data="adm_cancel"),
+            ]
+        ]
+    )
+    await callback.message.answer(
+        "Точно удалить все записанные конспекты из базы?", reply_markup=kb
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_clear_do")
+async def cb_adm_clear_do(callback: types.CallbackQuery) -> None:
+    if callback.from_user and is_admin(callback.from_user.id) and callback.message:
+        clear_sessions_db()
+        await callback.message.answer("База конспектов очищена.")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_cancel")
+async def cb_adm_cancel(callback: types.CallbackQuery) -> None:
+    if callback.message:
+        await callback.message.delete()
+    await callback.answer()
+
+
+# ==============================================================================
+# 6. ВСТРОЕННЫЙ HTTP-СЕРВЕР (РАЗДАЁТ INDEX.HTML, ЕСЛИ ОН ЛЕЖИТ РЯДОМ С MAIN.PY)
+# ==============================================================================
+async def http_serve_index(request: web.Request) -> web.Response:
+    if INDEX_HTML_PATH.exists():
+        return web.FileResponse(INDEX_HTML_PATH)
+    return web.Response(
+        text="NeuroFeedBot работает. Положите index.html рядом с main.py или укажите WEBAPP_URL.",
+        content_type="text/plain",
+    )
+
+
+async def start_web_server() -> web.AppRunner | None:
+    """Запускает лёгкий aiohttp-сервер параллельно с Telegram-ботом."""
+    try:
+        app = web.Application()
+        app.router.add_get("/", http_serve_index)
+        app.router.add_get("/index.html", http_serve_index)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", HTTP_PORT)
+        await site.start()
+        logger.info("HTTP сервер запущен на порту %s", HTTP_PORT)
+        return runner
+    except Exception as e:
+        logger.warning("HTTP сервер не запущен (возможно порт занят): %s", e)
+        return None
+
+
+# ==============================================================================
+# 7. ТОЧКА ВХОДА
+# ==============================================================================
+async def main() -> None:
+    init_db()
+    runner = await start_web_server()
     try:
         await bot.delete_webhook(drop_pending_updates=True)
-        logging.info("✅ Запускаем бота...")
+        logger.info("Бот запущен в режиме polling...")
         await dp.start_polling(bot)
-    except Exception as e:
-        logging.error(f"❌ Ошибка бота: {e}")
+    finally:
+        if runner:
+            await runner.cleanup()
+        await bot.session.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
